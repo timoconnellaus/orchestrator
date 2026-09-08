@@ -72,26 +72,35 @@ async def main() -> None:
                 )
                 assert not room.local_participant.track_publications
                 await room.disconnect()
-                # Test stimulus: beyond SDK session-close grace, inside old room TTL.
-                await asyncio.sleep(3)
-                try:
-                    remaining = await admin.room.list_participants(
-                        api.ListParticipantsRequest(room=name)
-                    )
-                except api.TwirpError as error:
-                    if error.code != "not_found":
-                        raise
-                else:
-                    if any(
-                        p.kind == api.ParticipantInfo.Kind.AGENT for p in remaining.participants
-                    ):
-                        raise AssertionError("Closed speech session still occupies its agent job")
+                # Client disconnect completion precedes the server's leave event.
+                # Bound actual departure, rather than assuming a 3-second delay;
+                # ten seconds still catches the old ~20-second orphan-room lifetime.
+                cleanup_started = asyncio.get_running_loop().time()
+                async with asyncio.timeout(10):
+                    while True:
+                        try:
+                            remaining = await admin.room.list_participants(
+                                api.ListParticipantsRequest(room=name)
+                            )
+                        except api.TwirpError as error:
+                            if error.code != "not_found":
+                                raise
+                            break
+                        if not any(
+                            p.kind == api.ParticipantInfo.Kind.AGENT
+                            for p in remaining.participants
+                        ):
+                            break
+                        await asyncio.sleep(0.2)
                 print(
                     json.dumps(
                         {
                             "attempt": attempt,
                             "fresh_listening_agent": True,
                             "closed_agent_departed": True,
+                            "cleanup_ms": round(
+                                (asyncio.get_running_loop().time() - cleanup_started) * 1000
+                            ),
                             "audio_published": False,
                         }
                     )

@@ -4,10 +4,10 @@
 
 | Check | Observed result |
 | --- | --- |
-| Combined scripts/check.sh gate | PASS: 218 tests total (56 control, 19 worker tools, 109 voice, 34 Flutter), plus configured type/lint/analyzer checks |
+| Combined scripts/check.sh gate | PASS: 220 tests total (56 control, 19 worker tools, 111 voice, 34 Flutter), plus configured type/lint/analyzer checks |
 | Worker tools TypeScript + tests | 19 tests pass, including deferred Pi flag loading and real MCP stdio EOF cancellation |
 | Control TypeScript + deterministic tests + build | 56 tests pass; build passes, including queued-context cutoff, native-session moves, pushed reply safety, and stripping both speech-provider keys from the Codex child environment |
-| Voice locked installation, Ruff, mypy, pytest | All pass; 109 tests in the final combined run. Coverage includes speech gating, capture generations, isolated utterance failures, timeouts, pushed replies, no TTS replay after partial audio, iterator cleanup, and pinned-SDK caption/acknowledgment forwarding |
+| Voice locked installation, Ruff, mypy, pytest | All pass; 111 tests in the final combined run. Coverage includes speech gating, capture generations, isolated utterance failures, timeouts, pushed replies, no TTS replay after partial audio, iterator cleanup, and pinned-SDK caption/acknowledgment forwarding |
 | Local LiveKit 1.13.6 transport | Two real local RTC participants exchanged reliable data and non-silent synthetic audio; no speech provider calls |
 | Flutter analyze/tests/APK in integrated checkout | Clean analysis, 34 tests pass, debug APK builds; live captions are tested without modifying drafts, outbox, or durable chat. The caption APK was installed on the authorized Pixel with adb reporting Success; includes no-stretch edge behavior and dragging selectable text in long main/worker histories. Earlier no-stretch APK installed on emulator-5554; an actual drag moved a message 262 px without changing its width/height. Dependencies warn about future Kotlin Gradle plugin compatibility |
 | Live Codex answer + read-only routing tool | PASS: real authenticated exact answer through HTTP; duplicate submission kept one operation; persisted thread resumed after app-server restart; exactly one real list_sessions callback. Worker mutations denied in code; no existing workers changed |
@@ -18,6 +18,39 @@
 | Gated gpt-live-transcribe synthetic check | PASS: actual local Silero plus production STT adapter and OpenAI; first interim 2,861 ms into a 4,588 ms clip, before commit; 5.652 audio seconds uploaded, one commit, no initial-idle uploads, no late-silence appends, no capture resets/errors; expected synthetic text present. No control/Codex endpoint or microphone used |
 | Deployed Codex credential separation | Earlier deployed Codex subprocess inspected privately: OpenAI speech key absent. Latest code has regressions excluding both OpenAI and ElevenLabs speech keys. No process environment or key was printed |
 | Eight-hour Android screen-off/Bluetooth soak | Not run or separately authorized; Pixel installation/basic voice authorization is not endurance evidence |
+
+## Voice stop/start regression — deployed, server rejoin checks pass
+
+After initial voice success, the user reported no detection after stopping and
+starting voice. Logs showed the first speech session closed at 11:32:17 UTC;
+two subsequent phone joins reused its room without creating a fresh voice job.
+The old agent continued advertising `listening` despite its closed AgentSession.
+Thus HTTP health, active-job count, and a stale agent attribute were insufficient.
+
+A silent same-room reproduction passed its first join and failed its second.
+Changing only to fresh rooms allowed two joins, but the third failed: closed jobs
+still held both admission slots. The production token regression was red on room
+reuse, and both session-close regressions were red on missing job shutdown.
+
+Each explicit token request now allocates `orchestrator-main-<uuid>` while keeping
+conversation metadata `main`. Session close unbinds capture and calls
+`ctx.shutdown`; bridge shutdown still reconciles submissions without cancelling
+accepted operations. The full gate passed 220 tests. Control and voice were
+restarted only after confirming no rooms and zero queued/running operations;
+coding workers and LiveKit media were left running.
+
+`scripts/check-voice-rejoin.py` was red against the old deployed token endpoint,
+before creating any room. The initial post-deployment check failed on a too-short
+3-second cleanup assumption: the Python client's disconnect completed before the
+server processed its leave, followed by the SDK's session-close grace. The check
+now observes departure with a 10-second limit, still below the old orphan-room
+lifetime, instead of assuming a fixed delay.
+
+All three production-token join/leave cycles then passed with fresh listening
+agents and closed-agent departure (cleanup 4866, 4865 and 4862 ms). The probe never
+publishes audio or touches existing/legacy rooms. It waits for departure between
+cycles; this is not proof of arbitrarily rapid toggles, actual microphone capture,
+or endurance. The original Pixel stop/start symptom still awaits user confirmation.
 
 ## ElevenLabs selected voice — deployed, phone audition confirmed
 
