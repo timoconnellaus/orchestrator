@@ -1,13 +1,107 @@
 # Orchestrator
 
-A personal Android voice/chat interface for coordinating Pi, Codex, and Claude Code sessions in Herdr.
+Personal Android voice and chat for coordinating Pi, Codex, and Claude Code sessions in Herdr. No login screen; use your own Tailscale devices.
 
-- Flutter Android client over Tailscale
-- Self-hosted LiveKit and Python voice worker (OpenAI speech)
-- TypeScript durable control module (SQLite)
-- Codex app-server reasoning with existing Codex authentication
-- Worker MCP tools and Pi extension
+## Architecture
 
-Implementation contract: [docs/contract.md](docs/contract.md).
+- **Flutter Android:** main chat, worker threads, session status, new sessions, hands-free microphone and playback.
+- **LiveKit + Python voice worker:** speech-to-text, turn detection, interruption and TTS. The voice worker forwards finalized utterances to control; it does not run a second reasoning LLM.
+- **TypeScript control:** durable SQLite messages/operations, reconnect event replay, Codex app-server reasoning and Herdr delivery.
+- **Worker tools:** per-session MCP for Codex/Claude Code and a Pi extension. Replies are explicit; terminal text is not silently scraped into the conversation.
 
-This is under active implementation. Live audio and eight-hour screen-off endurance require explicit integration testing; no production-readiness claim is made.
+The phone connection, media room, Codex thread, and coding tasks have independent lifetimes. Losing audio must not cancel a task, lose a result, or blindly retry a session launch.
+
+## Requirements
+
+- macOS with Node >=22.13, Codex CLI (tested protocol target 0.153.4), Herdr (target 0.8.2/protocol 20), `uv`, Flutter and Android SDK.
+- LiveKit server for voice (`brew install livekit`; initial target 1.13.6).
+- Existing `codex login` authentication for orchestration. Check `codex login status`.
+- **An OpenAI API key for speech**, billed separately from a ChatGPT/Codex subscription. Text does not require this key.
+
+App-server remains experimental: upgrades need adapter regression tests against the new generated protocol.
+
+## First setup
+
+```sh
+sh scripts/bootstrap.sh
+```
+
+This installs module-local dependencies and creates `.env` with random local LiveKit credentials and mode 0600. Existing `.env` is preserved. No keys are printed and no global agent configuration is changed.
+
+Edit `.env` locally:
+
+- Set `ORCHESTRATOR_PROJECT_ROOTS` to colon-separated directories containing the projects you want workers to access. Empty means live creation is not permitted.
+- Set `OPENAI_API_KEY` for voice. Keep it out of chat, source control and the phone.
+- Keep loopback addresses while testing locally. See Tailscale deployment below before connecting a physical phone.
+
+## Run text first
+
+```sh
+# Live Codex reasoning and real Herdr observation
+node scripts/run.mjs control
+
+# OR deterministic mock backend, separate database, no live coding workers
+node scripts/run.mjs mock
+```
+
+Choose one mode on port 8787, not both. Mock responses and workers are explicitly simulated; they are not provider or Herdr validation.
+
+In another terminal:
+
+```sh
+cd apps/mobile
+flutter run -d emulator-5554
+```
+
+The emulator default backend is `http://10.0.2.2:8787`. Edit it in Settings if needed. Development/testing authorization is **emulator only**; installing on a physical phone is a separate step.
+
+## Enable voice
+
+After setting the speech key:
+
+```sh
+# Once, fetch the voice worker's local model assets
+node scripts/run.mjs voice-download
+
+# In separate terminals, alongside the live control module:
+node scripts/run.mjs livekit
+node scripts/run.mjs voice
+```
+
+Enable listening while the app is visible and grant microphone permission. The Android notification shows the armed microphone. Voice unavailable does not disable text chat.
+
+The shipped local config advertises loopback media addresses. It is suitable for Mac-side transport tests, **not a claim that emulator or remote-phone media routing is configured**. Set a reachable `LIVEKIT_NODE_IP` and verify WebRTC connectivity for your chosen client network before expecting audio.
+
+## Tailscale deployment
+
+- Set `ORCHESTRATOR_HOST` and `LIVEKIT_NODE_IP` to the Mac's Tailscale IP.
+- Set public `LIVEKIT_URL` to `ws://<mac-tailscale-ip>:7880`. `LIVEKIT_INTERNAL_URL` stays `ws://127.0.0.1:7880` for the local voice worker.
+- Set the app backend to `http://<mac-tailscale-ip>:8787`.
+- Restrict tailnet access to the phone and Mac. Needed ports: TCP 8787 (control), TCP 7880 (signaling), TCP 7881 (ICE fallback), UDP 7882 (media). Test actual ICE connectivity; signaling success alone does not prove audio works.
+- Do not publish these listeners with Funnel, a public reverse proxy or router port forwarding. Tailscale supplies device access control and transport encryption; the app has no account/login layer.
+- LiveKit join tokens are issued automatically. Worker reply credentials are scoped to a managed session and kept in owner-only files; local same-user coding agents are not a sandbox from each other.
+- Keep the Mac awake while it hosts active tasks. Automatic startup/login services are not installed by these scripts.
+
+## Worker setup
+
+New managed workers receive per-process MCP/extension configuration; global Codex, Claude, and Pi settings are untouched. Existing sessions are observable but may be marked **limited** until a worker messaging adapter is explicitly provisioned. Blocked/unknown/busy sessions are not treated as safe terminal-input targets. See [worker adapter setup](packages/worker-tools/README.md).
+
+## Tests
+
+```sh
+sh scripts/check.sh
+cd apps/mobile && flutter build apk --debug
+```
+
+Default tests use fake provider/Herdr processes and temporary databases; they do not launch real worker sessions or make paid speech/model requests. Record explicit live smoke tests separately.
+
+## Known limits to verify
+
+- Eight-hour screen-off battery, microphone and Bluetooth reliability require a physical-device soak test. Emulator tests cannot establish this.
+- Continuous capture can transmit ambient audio to the Mac; speech providers may receive it depending on endpointing. VAD does not establish speaker identity or intent.
+- Starting or restarting microphone capture from the Android background is restricted. The app must not silently re-arm after stop or process death.
+- Native notification **Stop & close app** is a conservative MVP fallback that closes this app to guarantee microphone release. Ordinary in-app disarm is graceful.
+- Barge-in stops speech consumption/playback, not already accepted coding work. Long-running results remain available in chat after interruption.
+- Voice announcements for unsolicited worker replies, richer approvals, and automatic repair of uncertain operations are not assumed complete; inspect module READMEs and verification notes.
+
+Implementation interfaces: [contract](docs/contract.md). Initial ownership: [build lanes](docs/build-lanes.md).

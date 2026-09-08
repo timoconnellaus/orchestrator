@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ ! -x "$ROOT/node_modules/.bin/tsx" ]; then
+  echo 'Worker tools are not installed. Run npm ci in packages/worker-tools.' >&2
+  exit 1
+fi
+exec "$ROOT/node_modules/.bin/tsx" "$ROOT/src/main.ts" "$@"
