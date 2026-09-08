@@ -86,6 +86,35 @@ The main chat shows a transient **“Hearing… · not yet sent”** caption. It
 
 OpenAI currently lists live transcription at **$0.017/audio minute** (about $1.02/hour of submitted audio), with no charge for an idle connection itself; TTS is separate. See [pricing](https://developers.openai.com/api/docs/pricing) and the [protocol research and bounded evidence](docs/research/realtime-transcription.md). These are not eight-hour endurance or microphone-accuracy guarantees. Source changes are not proof that an existing running service has been updated.
 
+### Reply voice providers
+
+`TTS_PROVIDER=openai` remains the source default. To use ElevenLabs, set
+`TTS_PROVIDER=elevenlabs`, `ELEVEN_API_KEY`, and `ELEVEN_TTS_VOICE_ID` in the private
+`.env`; `ELEVEN_TTS_MODEL` defaults to `eleven_flash_v2_5`. This changes only spoken
+replies: OpenAI transcription and Codex-only reasoning remain unchanged. The key
+needs speech-generation permission; voice-metadata lookup is not required when
+a voice ID is supplied. ElevenLabs usage has separate billing.
+
+ElevenLabs audio streams over HTTP as each sentence becomes available, using
+24 kHz PCM and the existing explicit short-acknowledgment flush. It does not wait
+for the whole answer. We intentionally do not use SDK 1.5.12's shared WebSocket
+contexts: stream cancellation does not itself close those provider contexts.
+Sentence-owned HTTP responses close on interruption, cannot cancel another reply's
+response, and are not retried after partial audio. No automatic provider fallback
+or replay occurs on errors. Sentence boundaries may affect prosody; voice quality
+and phone latency need an actual listening check.
+
+An opt-in **billable** check exercises the selected TTS provider without microphone,
+STT, Codex, playback, or coding-worker operations:
+
+```sh
+cd apps/voice
+uv run --frozen --env-file ../../.env python ../../scripts/check-tts.py
+```
+
+Switching or rolling back (`TTS_PROVIDER=openai`) requires a coordinated voice-worker
+restart and phone rejoin. Adding a key alone does not change the provider.
+
 ### Voice-worker readiness
 
 The personal voice worker admits jobs by active voice-job count, not whole-Mac CPU

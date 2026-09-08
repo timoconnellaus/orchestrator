@@ -25,6 +25,7 @@ from .config import AGENT_NAME, Settings, turn_handling
 from .live_transcribe import MODEL as LIVE_STT_MODEL
 from .live_transcribe import LiveTranscribeSTT
 from .reply_audio import stream_reply_audio
+from .speech import make_tts
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ def make_session(settings: Settings, vad: silero.VAD) -> AgentSession[None]:
                 model=settings.stt_model, language=settings.stt_language, use_realtime=False
             )
         ),
-        tts=openai.TTS(model=settings.tts_model, voice=settings.tts_voice),
+        tts=make_tts(settings),
         vad=vad,
         turn_handling=turn_handling(),
         user_away_timeout=None,

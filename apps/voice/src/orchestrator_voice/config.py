@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -39,6 +40,18 @@ class Settings:
     tts_model: str = "gpt-4o-mini-tts"
     tts_voice: str = "coral"
     limits: BridgeLimits = BridgeLimits()
+    tts_provider: str = "openai"
+    elevenlabs_model: str = "eleven_flash_v2_5"
+    elevenlabs_voice_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.tts_provider not in ("openai", "elevenlabs"):
+            raise ValueError("TTS_PROVIDER must be openai or elevenlabs")
+        if self.tts_provider == "elevenlabs":
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", self.elevenlabs_voice_id):
+                raise ValueError("ELEVEN_TTS_VOICE_ID must be a nonempty, URL-safe voice ID")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", self.elevenlabs_model):
+                raise ValueError("ELEVEN_TTS_MODEL must be a nonempty model ID")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -64,6 +77,9 @@ class Settings:
             stt_language=env.get("OPENAI_STT_LANGUAGE", "en"),
             tts_model=env.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
             tts_voice=env.get("OPENAI_TTS_VOICE", "coral"),
+            tts_provider=env.get("TTS_PROVIDER", "openai"),
+            elevenlabs_model=env.get("ELEVEN_TTS_MODEL", "eleven_flash_v2_5"),
+            elevenlabs_voice_id=env.get("ELEVEN_TTS_VOICE_ID", ""),
             limits=BridgeLimits(
                 request_timeout=float(env.get("VOICE_REQUEST_TIMEOUT_SECONDS", "10")),
                 submission_timeout=float(env.get("VOICE_SUBMISSION_TIMEOUT_SECONDS", "25")),

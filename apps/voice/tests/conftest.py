@@ -8,7 +8,13 @@ from livekit.plugins import silero
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in ("OPENAI_API_KEY", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"):
+    for key in (
+        "OPENAI_API_KEY",
+        "ELEVEN_API_KEY",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "LIVEKIT_URL",
+    ):
         monkeypatch.delenv(key, raising=False)
 
     def forbidden(*args, **kwargs):

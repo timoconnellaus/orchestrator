@@ -13,6 +13,7 @@ def test_defaults_and_no_speculation_or_idle_limits():
     assert settings.stt_model == "gpt-live-transcribe"
     assert settings.tts_model == "gpt-4o-mini-tts"
     assert settings.tts_voice == "coral"
+    assert settings.tts_provider == "openai"
     options = turn_handling()
     assert options.get("turn_detection") == "vad"
     assert options.get("preemptive_generation") == {"enabled": False, "preemptive_tts": False}
@@ -72,6 +73,33 @@ def test_invalid_dispatch_metadata_fails_instead_of_misrouting(metadata):
 def test_invalid_deadlines_fail_fast(duration):
     with pytest.raises(ValueError):
         BridgeLimits(poll_timeout=duration)
+
+
+def test_elevenlabs_selection_keeps_openai_transcription_and_rollback_settings():
+    settings = Settings.from_env(
+        {"TTS_PROVIDER": "elevenlabs", "ELEVEN_TTS_VOICE_ID": "testVoiceId123"}
+    )
+    assert settings.tts_provider == "elevenlabs"
+    assert settings.elevenlabs_voice_id == "testVoiceId123"
+    assert settings.elevenlabs_model == "eleven_flash_v2_5"
+    assert settings.stt_model == "gpt-live-transcribe"
+    assert settings.tts_model == "gpt-4o-mini-tts"
+    assert settings.tts_voice == "coral"
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"TTS_PROVIDER": "typo"},
+        {"TTS_PROVIDER": "elevenlabs"},
+        {"TTS_PROVIDER": "elevenlabs", "ELEVEN_TTS_VOICE_ID": "bad/voice"},
+        {"TTS_PROVIDER": "elevenlabs", "ELEVEN_TTS_VOICE_ID": "voice?query"},
+        {"TTS_PROVIDER": "elevenlabs", "ELEVEN_TTS_VOICE_ID": "voice", "ELEVEN_TTS_MODEL": ""},
+    ],
+)
+def test_invalid_tts_selection_fails_closed(env):
+    with pytest.raises(ValueError):
+        Settings.from_env(env)
 
 
 @pytest.mark.parametrize("attempts", [0, 6])

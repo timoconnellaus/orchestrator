@@ -4,10 +4,10 @@
 
 | Check | Observed result |
 | --- | --- |
-| Combined scripts/check.sh gate | PASS: 206 tests total (56 control, 19 worker tools, 97 voice, 34 Flutter), plus configured type/lint/analyzer checks |
+| Combined scripts/check.sh gate | PASS: 218 tests total (56 control, 19 worker tools, 109 voice, 34 Flutter), plus configured type/lint/analyzer checks |
 | Worker tools TypeScript + tests | 19 tests pass, including deferred Pi flag loading and real MCP stdio EOF cancellation |
 | Control TypeScript + deterministic tests + build | 56 tests pass; build passes, including queued-context cutoff, native-session moves, pushed reply safety, and stripping both speech-provider keys from the Codex child environment |
-| Voice locked installation, Ruff, mypy, pytest | All pass; 97 tests in the final combined run. Coverage includes speech gating, capture generations, isolated utterance failures, timeouts, pushed replies, no TTS replay after partial audio, iterator cleanup, and pinned-SDK caption/acknowledgment forwarding |
+| Voice locked installation, Ruff, mypy, pytest | All pass; 109 tests in the final combined run. Coverage includes speech gating, capture generations, isolated utterance failures, timeouts, pushed replies, no TTS replay after partial audio, iterator cleanup, and pinned-SDK caption/acknowledgment forwarding |
 | Local LiveKit 1.13.6 transport | Two real local RTC participants exchanged reliable data and non-silent synthetic audio; no speech provider calls |
 | Flutter analyze/tests/APK in integrated checkout | Clean analysis, 34 tests pass, debug APK builds; live captions are tested without modifying drafts, outbox, or durable chat. The caption APK was installed on the authorized Pixel with adb reporting Success; includes no-stretch edge behavior and dragging selectable text in long main/worker histories. Earlier no-stretch APK installed on emulator-5554; an actual drag moved a message 262 px without changing its width/height. Dependencies warn about future Kotlin Gradle plugin compatibility |
 | Live Codex answer + read-only routing tool | PASS: real authenticated exact answer through HTTP; duplicate submission kept one operation; persisted thread resumed after app-server restart; exactly one real list_sessions callback. Worker mutations denied in code; no existing workers changed |
@@ -18,6 +18,29 @@
 | Gated gpt-live-transcribe synthetic check | PASS: actual local Silero plus production STT adapter and OpenAI; first interim 2,861 ms into a 4,588 ms clip, before commit; 5.652 audio seconds uploaded, one commit, no initial-idle uploads, no late-silence appends, no capture resets/errors; expected synthetic text present. No control/Codex endpoint or microphone used |
 | Deployed Codex credential separation | Earlier deployed Codex subprocess inspected privately: OpenAI speech key absent. Latest code has regressions excluding both OpenAI and ElevenLabs speech keys. No process environment or key was printed |
 | Eight-hour Android screen-off/Bluetooth soak | Not run or separately authorized; Pixel installation/basic voice authorization is not endurance evidence |
+
+## ElevenLabs selected voice — integration checks, not yet deployed
+
+The user selected a voice ID for ElevenLabs. Voice-metadata lookup returned HTTP
+401 `missing_permissions`, but the actual speech endpoint succeeded using that ID;
+no broader key permissions were requested. The pinned plugin is
+`livekit-plugins-elevenlabs==1.5.12`, with `eleven_flash_v2_5` and PCM 24 kHz output.
+
+The first bounded synthetic check returned 2.259 seconds of non-silent audio
+(peak 32768, RMS 8566.4). Its first audio frame took **5564 ms**. This is a backend
+probe, not phone latency, voice-quality evidence, or a speed-improvement claim.
+A second bounded check returned its first audio frame in **497 ms** and completed
+in **904 ms**: sentence TTFBs were **495 ms** (7 characters) and **274 ms**
+(31 characters), producing 2.445 seconds of audio. The initial delay was not
+reproduced; its exact cause was not captured. These samples do not establish phone
+latency, sustained performance, or comparative voice quality.
+
+Production selection uses sentence-scoped HTTP audio through the existing reply
+adapter, not native shared WebSocket contexts. Offline checks cover short receipt
+flushes, no retry after partial audio, and overlapping replies whose response
+cleanup must remain independent. The full offline gate passed 218 tests, plus
+configured type/lint/analyzer checks. OpenAI remains the active provider until a
+coordinated voice-worker switch; STT and Codex reasoning are unchanged.
 
 ## Phone admission failure — assignment fix verified
 
