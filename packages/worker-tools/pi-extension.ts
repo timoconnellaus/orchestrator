@@ -3,28 +3,15 @@ import { Type } from 'typebox';
 import { WorkerClient, formatToolOutput } from './src/client';
 import { loadConfig } from './src/config';
 
-/** Per-launch configuration only: deliberately no global config or background polling. */
-export default async function orchestratorWorker(pi: ExtensionAPI): Promise<void> {
-  pi.registerFlag('orchestrator-credential-file', {
-    description: 'Owner-only file containing this worker\'s scoped Orchestrator credential', type: 'string',
-  });
-  pi.registerFlag('orchestrator-url', {
-    description: 'Orchestrator control URL', type: 'string',
-  });
-  const credentialFlag = pi.getFlag('orchestrator-credential-file');
-  const urlFlag = pi.getFlag('orchestrator-url');
-  const credentialFile = typeof credentialFlag === 'string' ? credentialFlag : undefined;
-  const url = typeof urlFlag === 'string' ? urlFlag : undefined;
-  if (!credentialFile && !process.env.ORCHESTRATOR_WORKER_CREDENTIAL_FILE && !process.env.ORCHESTRATOR_WORKER_TOKEN) return;
-  const client = new WorkerClient(await loadConfig({ credentialFile, url }));
-
+function registerTools(pi: ExtensionAPI, client: WorkerClient, lifetime: AbortSignal): void {
+  const scopedSignal = (signal?: AbortSignal): AbortSignal => signal ? AbortSignal.any([signal, lifetime]) : lifetime;
   pi.registerTool({
     name: 'read_inbox', label: 'Orchestrator inbox',
     description: 'Read recent messages assigned to this worker. Non-destructive, output capped at 40 KiB. Herdr owns wakeup; do not poll repeatedly.',
     promptSnippet: 'Read messages from the orchestrator',
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute(_toolCallId, _params, signal) {
-      const result = await client.inbox(signal);
+      const result = await client.inbox(scopedSignal(signal));
       return { content: [{ type: 'text', text: formatToolOutput(result) }], details: {} };
     },
   });
@@ -40,16 +27,34 @@ export default async function orchestratorWorker(pi: ExtensionAPI): Promise<void
       replyTo: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: 'Inbox message id being answered.' })),
     }, { additionalProperties: false }),
     async execute(_toolCallId, params, signal) {
-      const result = await client.reply(params, signal);
+      const result = await client.reply(params, scopedSignal(signal));
       return { content: [{ type: 'text', text: formatToolOutput(result) }], details: {} };
     },
   });
+}
+
+/** CLI flags are populated after factory execution in Pi 0.84.4. */
+export default function orchestratorWorker(pi: ExtensionAPI): void {
+  pi.registerFlag('orchestrator-credential-file', {
+    description: 'Owner-only file containing this worker\'s scoped Orchestrator credential', type: 'string',
+  });
+  pi.registerFlag('orchestrator-url', { description: 'Orchestrator control URL', type: 'string' });
+  const lifetime = new AbortController();
+  pi.on('session_shutdown', () => { lifetime.abort(); });
   pi.on('session_start', async (_event, ctx) => {
+    const credentialFlag = pi.getFlag('orchestrator-credential-file');
+    const urlFlag = pi.getFlag('orchestrator-url');
+    const credentialFile = typeof credentialFlag === 'string' ? credentialFlag : undefined;
+    const url = typeof urlFlag === 'string' ? urlFlag : undefined;
+    if (!credentialFile && !process.env.ORCHESTRATOR_WORKER_CREDENTIAL_FILE && !process.env.ORCHESTRATOR_WORKER_TOKEN) return;
     try {
-      await client.register();
-      if (ctx.hasUI) ctx.ui.setStatus('orchestrator', 'Orchestrator connected');
+      const client = new WorkerClient(await loadConfig({ credentialFile, url }));
+      if (lifetime.signal.aborted) return;
+      registerTools(pi, client, lifetime.signal);
+      await client.register(lifetime.signal);
+      if (ctx.hasUI && !lifetime.signal.aborted) ctx.ui.setStatus('orchestrator', 'Orchestrator connected');
     } catch {
-      if (ctx.hasUI) ctx.ui.notify('Orchestrator unavailable. Reply tools will retry registration when called.', 'warning');
+      if (ctx.hasUI && !lifetime.signal.aborted) ctx.ui.notify('Orchestrator registration unavailable. Check the worker credential/configuration; configured reply tools retry registration when called.', 'warning');
     }
   });
 }

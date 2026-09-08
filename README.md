@@ -53,7 +53,7 @@ cd apps/mobile
 flutter run -d emulator-5554
 ```
 
-The emulator default backend is `http://10.0.2.2:8787`. Edit it in Settings if needed. Development/testing authorization is **emulator only**; installing on a physical phone is a separate step.
+The emulator default backend is `http://10.0.2.2:8787`. Edit it in Settings if needed. This checkout's private `.env` uses **8790** because another application owns 8787; the installed emulator app is configured for `http://10.0.2.2:8790`. Development/testing authorization is **emulator only**; installing on a physical phone is a separate step.
 
 ## Enable voice
 
@@ -94,6 +94,15 @@ cd apps/mobile && flutter build apk --debug
 ```
 
 Default tests use fake provider/Herdr processes and temporary databases; they do not launch real worker sessions or make paid speech/model requests. Record explicit live smoke tests separately.
+
+Optional real Codex check (uses your existing ChatGPT/Codex allowance):
+
+```sh
+(cd apps/control && npm run build)
+node scripts/smoke-codex.mjs
+```
+
+This creates an isolated loopback control server and temporary SQLite database. It verifies an exact model answer, duplicate request acceptance, a real `list_sessions` callback, and thread resume after restarting app-server. Worker mutations are rejected by the harness, not merely discouraged in a prompt. It does not modify existing Herdr workers or global agent configuration. Results and remaining gaps are recorded in [verification](docs/verification.md).
 
 ## Known limits to verify
 

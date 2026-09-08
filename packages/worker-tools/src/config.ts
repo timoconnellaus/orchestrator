@@ -27,7 +27,7 @@ export function parseArguments(args: string[]): ConfigInput {
 
 /** Only a small, owner-readable regular file may carry a session credential. */
 async function readCredential(path: string): Promise<ConfigInput> {
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = await file.stat();
     if (!stat.isFile() || stat.size > 8192 || (stat.mode & 0o077) !== 0) {
