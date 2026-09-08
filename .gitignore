@@ -1,0 +1,15 @@
+.pi/
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.data/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+*.sqlite*
+.DS_Store
+artifacts/
