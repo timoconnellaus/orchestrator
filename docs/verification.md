@@ -19,6 +19,19 @@
 | Deployed Codex credential separation | Earlier deployed Codex subprocess inspected privately: OpenAI speech key absent. Latest code has regressions excluding both OpenAI and ElevenLabs speech keys. No process environment or key was printed |
 | Eight-hour Android screen-off/Bluetooth soak | Not run or separately authorized; Pixel installation/basic voice authorization is not endurance evidence |
 
+## Runtime launch timeouts
+
+The original media, control and voice background launches each had an explicit
+36000-second timeout. These expired independently of the voice restart bug.
+Media was restarted and its silent agent-dispatch check passed. Control and voice
+were subsequently restarted without that explicit timeout. On control recovery,
+the journal contained 22 succeeded operations and no unfinished operations;
+no coding workers were restarted and no mutation was blindly retried.
+The subsequent silent voice probe passed: the agent joined and reached listening
+without publishing audio. Actual Pixel stop/start verification remains pending.
+These remain session-launched services, not reboot/crash-supervised system services.
+This recovery is not an eight-hour endurance result.
+
 ## Voice stop/start regression — deployed, server rejoin checks pass
 
 After initial voice success, the user reported no detection after stopping and
