@@ -12,8 +12,8 @@
 | Flutter analyze/tests/APK in integrated checkout | Clean analysis, 30 tests pass, debug APK builds; includes no-stretch edge behavior and dragging selectable text in long main/worker histories. Fixed APK installed on emulator-5554; an actual drag moved a message 262 px without changing its width/height. Dependencies warn about future Kotlin Gradle plugin compatibility |
 | Live Codex answer + read-only routing tool | PASS: real authenticated exact answer through HTTP; duplicate submission kept one operation; persisted thread resumed after app-server restart; exactly one real list_sessions callback. Worker mutations denied in code; no existing workers changed |
 | Emulator install/UI/reconnect | Installed only on emulator-5554; settings saved http://10.0.2.2:8790, main chat round trip, mock worker creation and worker follow-up/reply verified through the UI; app force-stop/relaunch preserved URL/history, replayed a reply created while offline exactly once, and kept voice disarmed |
-| Real worker provisioning/delivery | Not run; existing Herdr workers were not mutated. Live project allowlist remains unset |
-| Paid OpenAI transcription/TTS | Not run: OPENAI_API_KEY not configured |
+| Real worker provisioning/delivery | Not run; existing Herdr workers were not mutated. Approved project root /Users/tim/repos is now saved in private local configuration |
+| Paid OpenAI transcription/TTS | PASS: both gpt-4o-mini-transcribe and gpt-4o-mini-tts accessible. Repeat generated 122,444-byte synthetic WAV and transcribed exactly "Orchestrator speech check." Initial short-phrase assertion failed without a saved transcript, so its cause remains unknown; this verifies access, not an accuracy benchmark. No microphone recording used |
 | Eight-hour Android screen-off/Bluetooth soak | Not run: physical-device testing not authorized yet |
 
 ## Review and recovery

@@ -57,7 +57,13 @@ The emulator default backend is `http://10.0.2.2:8787`. Edit it in Settings if n
 
 ## Enable voice
 
-After setting the speech key:
+After setting the speech key, optionally check the configured models with a short, billable synthetic speech round trip (no microphone recording):
+
+```sh
+node --env-file=.env scripts/check-speech.mjs
+```
+
+Start the media services:
 
 ```sh
 # Once, fetch the voice worker's local model assets
