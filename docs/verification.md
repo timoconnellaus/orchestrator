@@ -35,8 +35,10 @@ after confirming no active rooms; control/coding workers were not restarted.
 `scripts/check-voice-dispatch.py` passed against the restarted worker:
 `agent_joined: true`, `agent_listening: true`, `audio_published: false`. It created
 and cleaned up only its temporary probe room. This verifies actual agent dispatch
-and session readiness, not merely HTTP health; phone reply timing remains pending
-user verification.
+and session readiness, not merely HTTP health. The user then retried on the Pixel
+and confirmed “ok that's working,” establishing the basic voice request/reply path.
+Quantified phone latency, captions, interruption, mute/reconnect, and endurance
+were not separately confirmed by that acknowledgment.
 
 ## Pushed reply update — deployed, phone verification pending
 
