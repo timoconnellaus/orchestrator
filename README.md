@@ -117,6 +117,12 @@ restart and phone rejoin. Adding a key alone does not change the provider.
 
 ### Voice-worker readiness
 
+Every explicit Join voice request gets a fresh `orchestrator-main-<uuid>` room and
+agent dispatch. The durable conversation remains `main`; media rooms are not
+conversation storage. Closing the speech session also shuts down its voice job,
+so a returning phone cannot inherit a dead session or leave closed jobs occupying
+admission capacity. This does not cancel accepted control/coding operations.
+
 The personal voice worker admits jobs by active voice-job count, not whole-Mac CPU
 usage: at most two active room jobs (including a reconnect/closing room), one idle
 prewarmed process, and the SDK's pending-assignment reservation checks. A busy Mac
@@ -131,8 +137,12 @@ cd apps/voice
 uv run --frozen --env-file ../../.env python ../../scripts/check-voice-dispatch.py
 ```
 
-It creates and cleans up only a uniquely named probe room. Actual phone audio and
-interruption still require a separate user-driven check.
+It creates and cleans up only a uniquely named probe room. Also run
+`../../scripts/check-voice-rejoin.py` with the same `uv` invocation to test three
+join/leave cycles through the production token endpoint. That check verifies
+fresh listening agents and departure of closed agents, without publishing audio;
+it refuses to join/delete the legacy shared room or a pre-existing room.
+Actual phone audio and interruption still require a separate user-driven check.
 
 ## Tailscale deployment
 

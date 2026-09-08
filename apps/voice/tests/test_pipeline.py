@@ -11,8 +11,8 @@ import httpx
 import openai as openai_sdk
 import pytest
 from livekit import rtc
-from livekit.agents import AgentSession, APIConnectOptions, llm
-from livekit.agents.voice import ModelSettings
+from livekit.agents import AgentSession, APIConnectOptions, JobContext, llm
+from livekit.agents.voice import CloseEvent, CloseReason, ModelSettings
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.room_io._output import _ParticipantLegacyTranscriptionOutput
 from livekit.agents.voice.run_result import RunResult
@@ -25,10 +25,35 @@ from orchestrator_voice.worker import (
     ControlAgent,
     LocalNodeOnlyLLM,
     bind_capture_boundaries,
+    entrypoint,
     make_session,
     room_options,
     server,
 )
+
+
+@pytest.mark.parametrize(
+    "reason", [CloseReason.PARTICIPANT_DISCONNECTED, CloseReason.USER_INITIATED]
+)
+async def test_closed_speech_session_retires_job_and_unbinds_capture(monkeypatch, reason):
+    events: rtc.EventEmitter[str] = rtc.EventEmitter()
+    session = SimpleNamespace(on=events.on, start=AsyncMock())
+    ctx = Mock(spec=JobContext)
+    ctx.job = SimpleNamespace(metadata="")
+    ctx.proc = SimpleNamespace(userdata={"vad": object()})
+    ctx.room = object()
+    unbind = Mock()
+    monkeypatch.setattr("orchestrator_voice.worker.make_session", lambda *_: session)
+    monkeypatch.setattr("orchestrator_voice.worker.bind_capture_boundaries", lambda *_: unbind)
+    try:
+        await entrypoint(ctx)
+        ctx.shutdown.assert_not_called()
+        events.emit("close", CloseEvent(reason=reason))
+        unbind.assert_called_once_with()
+        ctx.shutdown.assert_called_once_with(reason="voice session closed")
+    finally:
+        for call in ctx.add_shutdown_callback.call_args_list:
+            await call.args[0]()  # Close the real bridge client; no cancellation API is called.
 
 
 async def collect(agent, context):

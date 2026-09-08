@@ -241,6 +241,11 @@ async def entrypoint(ctx: JobContext) -> None:
         if unbind_capture is not None:
             unbind_capture()
         logger.warning("Voice session closed reason=%s; app must reconnect", event.reason)
+        # A closed AgentSession cannot hear a returning participant. Retire its
+        # job now, rather than advertising stale readiness and holding admission
+        # capacity until the room expires. Bridge shutdown reconciles submissions;
+        # it never cancels accepted control operations or coding workers.
+        ctx.shutdown(reason="voice session closed")
 
     await session.start(
         agent=ControlAgent(bridge, conversation_id),

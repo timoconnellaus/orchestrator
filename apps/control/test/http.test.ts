@@ -88,10 +88,15 @@ test('LiveKit token is signed, room-scoped, uniquely identified and explicitly d
   const f = fixture({ livekitUrl: 'wss://phone.example.test', livekitKey: 'key', livekitSecret: 'a-secret-at-least-thirty-two-characters' });
   try {
     const one = await voiceToken(f.config); const two = await voiceToken(f.config);
-    assert.equal(one.room, 'orchestrator-main'); assert.equal(one.url, 'wss://phone.example.test');
+    assert.match(one.room, /^orchestrator-main-[0-9a-f-]{36}$/);
+    assert.notEqual(one.room, two.room, 'an explicit new join must not reuse a closed room session');
+    assert.equal(one.url, 'wss://phone.example.test');
     const verifier = new TokenVerifier(f.config.livekitKey!, f.config.livekitSecret!);
     const claims = await verifier.verify(one.token); const other = await verifier.verify(two.token);
-    assert.notEqual(claims.sub, other.sub); assert.equal(claims.video!.room, 'orchestrator-main');
+    assert.notEqual(claims.sub, other.sub); assert.equal(claims.video!.room, one.room);
+    assert.equal(other.video!.room, two.room);
+    assert.deepEqual(JSON.parse(claims.metadata!), { conversationId: 'main' });
+    assert.deepEqual(JSON.parse(other.metadata!), { conversationId: 'main' });
     assert.equal(claims.video!.roomJoin, true); assert.equal(claims.video!.roomAdmin, undefined);
     assert.match(JSON.stringify(claims.roomConfig), /orchestrator-voice/);
     assert.equal(f.store.events(0).length, 0);
