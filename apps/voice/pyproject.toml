@@ -1,0 +1,47 @@
+[project]
+name = "orchestrator-voice"
+version = "0.1.0"
+description = "LiveKit speech bridge to durable Orchestrator control operations"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "livekit-agents[openai,silero]==1.5.12",
+  "httpx>=0.28.1,<0.29",
+  # LiveKit 1.5.12 supplies httpx clients; OpenAI 3.x switched to httpx2.
+  "openai>=2,<3",
+]
+
+[project.scripts]
+orchestrator-voice = "orchestrator_voice.worker:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.11,<1", "mypy>=1.15,<2"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+include = ["src", "tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/orchestrator_voice", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["test_bridge", "test_pipeline", "test_config", "conftest"]
+disallow_untyped_defs = false
+disallow_untyped_calls = false
