@@ -4,10 +4,10 @@
 
 | Check | Observed result |
 | --- | --- |
-| Combined scripts/check.sh gate | PASS: 202 tests total (56 control, 19 worker tools, 93 voice, 34 Flutter), plus configured type/lint/analyzer checks |
+| Combined scripts/check.sh gate | PASS: 206 tests total (56 control, 19 worker tools, 97 voice, 34 Flutter), plus configured type/lint/analyzer checks |
 | Worker tools TypeScript + tests | 19 tests pass, including deferred Pi flag loading and real MCP stdio EOF cancellation |
 | Control TypeScript + deterministic tests + build | 56 tests pass; build passes, including queued-context cutoff, native-session moves, pushed reply safety, and stripping both speech-provider keys from the Codex child environment |
-| Voice locked installation, Ruff, mypy, pytest | All pass; 93 tests in the final combined run. Coverage includes speech gating, capture generations, isolated utterance failures, timeouts, pushed replies, no TTS replay after partial audio, iterator cleanup, and pinned-SDK caption/acknowledgment forwarding |
+| Voice locked installation, Ruff, mypy, pytest | All pass; 97 tests in the final combined run. Coverage includes speech gating, capture generations, isolated utterance failures, timeouts, pushed replies, no TTS replay after partial audio, iterator cleanup, and pinned-SDK caption/acknowledgment forwarding |
 | Local LiveKit 1.13.6 transport | Two real local RTC participants exchanged reliable data and non-silent synthetic audio; no speech provider calls |
 | Flutter analyze/tests/APK in integrated checkout | Clean analysis, 34 tests pass, debug APK builds; live captions are tested without modifying drafts, outbox, or durable chat. The caption APK was installed on the authorized Pixel with adb reporting Success; includes no-stretch edge behavior and dragging selectable text in long main/worker histories. Earlier no-stretch APK installed on emulator-5554; an actual drag moved a message 262 px without changing its width/height. Dependencies warn about future Kotlin Gradle plugin compatibility |
 | Live Codex answer + read-only routing tool | PASS: real authenticated exact answer through HTTP; duplicate submission kept one operation; persisted thread resumed after app-server restart; exactly one real list_sessions callback. Worker mutations denied in code; no existing workers changed |
@@ -18,6 +18,25 @@
 | Gated gpt-live-transcribe synthetic check | PASS: actual local Silero plus production STT adapter and OpenAI; first interim 2,861 ms into a 4,588 ms clip, before commit; 5.652 audio seconds uploaded, one commit, no initial-idle uploads, no late-silence appends, no capture resets/errors; expected synthetic text present. No control/Codex endpoint or microphone used |
 | Deployed Codex credential separation | Earlier deployed Codex subprocess inspected privately: OpenAI speech key absent. Latest code has regressions excluding both OpenAI and ElevenLabs speech keys. No process environment or key was printed |
 | Eight-hour Android screen-off/Bluetooth soak | Not run or separately authorized; Pixel installation/basic voice authorization is not endurance evidence |
+
+## Phone admission failure — assignment fix verified
+
+The user's first post-update attempt joined LiveKit at 08:06:30 UTC and published
+a microphone track, but the room job was rejected with `no servers available`.
+The idle voice worker had marked itself unavailable at 08:06:26 with system load
+0.928 against the default 0.7 threshold. No agent joined and no voice operation
+reached control; HTTP health had not tested this admission path.
+
+A pinned-SDK regression reproduced rejection of an idle worker at simulated 95%
+Mac CPU. Admission now uses active voice-job count (two maximum), one prewarmed
+idle process, and the SDK's reserved-slot/draining checks. Four regressions pass;
+the combined gate passes 206 tests. Only the idle voice worker was restarted,
+after confirming no active rooms; control/coding workers were not restarted.
+`scripts/check-voice-dispatch.py` passed against the restarted worker:
+`agent_joined: true`, `agent_listening: true`, `audio_published: false`. It created
+and cleaned up only its temporary probe room. This verifies actual agent dispatch
+and session readiness, not merely HTTP health; phone reply timing remains pending
+user verification.
 
 ## Pushed reply update — deployed, phone verification pending
 

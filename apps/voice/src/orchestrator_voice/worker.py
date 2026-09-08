@@ -194,7 +194,20 @@ def prewarm(process: JobProcess) -> None:
     process.userdata["vad"] = silero.VAD.load()
 
 
-server = AgentServer(setup_fnc=prewarm, shutdown_process_timeout=35.0)
+def voice_job_load(worker: AgentServer) -> float:
+    # This is a personal Mac, not a dedicated autoscaled voice host. Unrelated
+    # CPU activity must not reject an idle voice worker. Allow an active room
+    # plus one reconnect/closing room; the SDK also accounts for reserved jobs.
+    return len(worker.active_jobs) / 2
+
+
+server = AgentServer(
+    setup_fnc=prewarm,
+    shutdown_process_timeout=35.0,
+    load_fnc=voice_job_load,
+    load_threshold=1.0,
+    num_idle_processes=1,
+)
 
 
 @server.rtc_session(agent_name=AGENT_NAME)

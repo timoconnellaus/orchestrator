@@ -86,6 +86,25 @@ The main chat shows a transient **“Hearing… · not yet sent”** caption. It
 
 OpenAI currently lists live transcription at **$0.017/audio minute** (about $1.02/hour of submitted audio), with no charge for an idle connection itself; TTS is separate. See [pricing](https://developers.openai.com/api/docs/pricing) and the [protocol research and bounded evidence](docs/research/realtime-transcription.md). These are not eight-hour endurance or microphone-accuracy guarantees. Source changes are not proof that an existing running service has been updated.
 
+### Voice-worker readiness
+
+The personal voice worker admits jobs by active voice-job count, not whole-Mac CPU
+usage: at most two active room jobs (including a reconnect/closing room), one idle
+prewarmed process, and the SDK's pending-assignment reservation checks. A busy Mac
+can still delay audio processing, but unrelated CPU work no longer rejects an idle
+voice worker. HTTP health alone does not prove that an agent joined the room.
+
+An opt-in local check verifies real dispatch and the agent's `listening` state
+without publishing microphone audio, sending chat, or invoking coding tools:
+
+```sh
+cd apps/voice
+uv run --frozen --env-file ../../.env python ../../scripts/check-voice-dispatch.py
+```
+
+It creates and cleans up only a uniquely named probe room. Actual phone audio and
+interruption still require a separate user-driven check.
+
 ## Tailscale deployment
 
 - Set `ORCHESTRATOR_HOST` and `LIVEKIT_NODE_IP` to the Mac's Tailscale IP.
