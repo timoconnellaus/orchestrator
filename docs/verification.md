@@ -19,7 +19,7 @@
 | Deployed Codex credential separation | Earlier deployed Codex subprocess inspected privately: OpenAI speech key absent. Latest code has regressions excluding both OpenAI and ElevenLabs speech keys. No process environment or key was printed |
 | Eight-hour Android screen-off/Bluetooth soak | Not run or separately authorized; Pixel installation/basic voice authorization is not endurance evidence |
 
-## ElevenLabs selected voice — deployed, phone audition pending
+## ElevenLabs selected voice — deployed, phone audition confirmed
 
 The user selected a voice ID for ElevenLabs. Voice-metadata lookup returned HTTP
 401 `missing_permissions`, but the actual speech endpoint succeeded using that ID;
@@ -47,7 +47,10 @@ preserved; a runtime check also confirmed both speech keys are absent from the
 owned Codex process. STT, control and coding workers were not changed/restarted.
 The post-restart silent probe passed: `agent_joined: true`,
 `agent_listening: true`, `audio_published: false`; its temporary room was cleaned up.
-Actual Pixel voice quality, reply timing and interruption still require user audition.
+After being asked to rejoin on the Pixel, audition the voice and interrupt its
+answer, the user confirmed: “Yep it works.” The phone audition is accepted.
+No quantitative latency, separate mute/reconnect test, or endurance result is
+established by that acknowledgment.
 
 ## Phone admission failure — assignment fix verified
 
