@@ -12,9 +12,20 @@ function fakeCodex(dir: string, mode = 'success'): { bin: string; log: string } 
 import {appendFileSync} from 'node:fs';
 const mode=${JSON.stringify(mode)}, log=${JSON.stringify(log)};
 const write = obj => process.stdout.write(JSON.stringify(obj)+'\\n');
-appendFileSync(log,JSON.stringify({argv:process.argv.slice(2)})+'\\n');
+appendFileSync(log,JSON.stringify({argv:process.argv.slice(2),speechKeyPresent:Boolean(process.env.OPENAI_API_KEY),elevenKeyPresent:Boolean(process.env.ELEVEN_API_KEY)})+'\\n');
 let thread='thread-persisted', turn='turn-1', waiting=0, hostEnabled=false;
 const finish=()=>{write({method:'item/agentMessage/delta',params:{threadId:thread,turnId:turn,itemId:'answer',delta:'partial'}});write({method:'item/completed',params:{threadId:thread,turnId:turn,item:{type:'agentMessage',id:'answer',text:'Final answer'}}});write({method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed',items:[],error:null}}});};
+const streamAnswer=()=>{
+ write({method:'item/started',params:{threadId:thread,turnId:'stale',item:{type:'agentMessage',id:'stale',phase:'final_answer',text:'WRONG'}}});
+ write({method:'item/completed',params:{threadId:'other',turnId:turn,item:{type:'agentMessage',id:'wrong',text:'WRONG'}}});
+ write({method:'item/completed',params:{threadId:thread,turnId:turn,item:{type:'reasoning',id:'reason',text:'PRIVATE REASONING'}}});
+ write({method:'item/completed',params:{threadId:thread,turnId:turn,item:{type:'agentMessage',id:'progress',phase:'commentary',text:'I will check.'}}});
+ write({method:'item/started',params:{threadId:thread,turnId:turn,item:{type:'agentMessage',id:'answer',phase:'final_answer',text:''}}});
+ write({method:'item/agentMessage/delta',params:{threadId:thread,turnId:turn,itemId:'answer',delta:'First. '}});
+ write({method:'item/agentMessage/delta',params:{threadId:thread,turnId:'stale',itemId:'answer',delta:'WRONG'}});
+ write({method:'item/completed',params:{threadId:thread,turnId:turn,item:{type:'agentMessage',id:'answer',phase:'final_answer',text:'First. Second.'}}});
+};
+const streamDone=()=>write({method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed',items:[],error:null}}});
 createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line);appendFileSync(log,JSON.stringify(m)+'\\n');
  const result=value=>write({id:m.id,result:value});
@@ -32,8 +43,21 @@ createInterface({input:process.stdin}).on('line',line=>{
  else if(m.method==='turn/start'){
    if(mode==='exit'){process.exit(3);return;}
    if(mode==='rpc-error'){write({id:m.id,error:{code:-1,message:'rejected'}});return;}
+   if(mode==='early-stream'){streamAnswer();result({turn:{id:turn}});streamDone();return;}
    result({turn:{id:turn}});
+   if(mode==='stream'||mode==='seal'){
+     streamAnswer();
+     if(mode==='seal'){waiting=1;write({id:'late',method:'item/tool/call',params:{threadId:thread,turnId:turn,callId:'late',tool:'create_session',arguments:{}}});}
+     else streamDone();
+     return;
+   }
+   if(mode==='mutating-stream'||mode==='reading-stream'){
+     waiting=1;write({id:'initial',method:'item/tool/call',params:{threadId:thread,turnId:turn,callId:'initial',tool:mode==='mutating-stream'?'create_session':'list_sessions',arguments:{}}});
+     if(mode==='reading-stream')streamAnswer();
+     return;
+   }
    if(mode==='timeout')return;
+   if(mode==='oversized-final'){write({method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed',items:[{type:'agentMessage',id:'large',phase:'final_answer',text:'x'.repeat(32769)}]}}});return;}
    if(mode==='turn-error'){write({method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'failed',error:{message:'provider error'}}}});return;}
    if(mode==='notification-error'){write({method:'error',params:{threadId:thread,turnId:turn,willRetry:false,error:{message:'fatal'}}});return;}
    if(mode==='empty'){write({method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed',error:null}}});return;}
@@ -46,7 +70,11 @@ createInterface({input:process.stdin}).on('line',line=>{
      write({id:'permissions',method:'item/permissions/requestApproval',params:{}});
      write({id:'other',method:'exec-unrestricted',params:{}});
    }else finish();
- } else if(m.id && !m.method && --waiting===0)finish();
+ } else if(m.id && !m.method && --waiting===0){
+   if(mode==='mutating-stream'){streamAnswer();streamDone();}
+   else if(mode==='reading-stream'||mode==='seal')streamDone();
+   else finish();
+ }
 });\n`, { mode: 0o700 });
   return { bin, log };
 }
@@ -88,19 +116,58 @@ test('Codex JSONL initializes experimental routing tools, denies approvals, and 
   } finally { adapter.close(); await f.close(); }
 });
 
-for (const mode of ['exit', 'timeout', 'turn-error', 'notification-error', 'rpc-error', 'empty', 'malformed']) {
+for (const mode of ['exit', 'timeout', 'turn-error', 'notification-error', 'rpc-error', 'empty', 'malformed', 'oversized-final']) {
   test(`Codex ${mode} terminates pending turn without hanging or retrying`, async () => {
     const f = fixture(); const fake = fakeCodex(f.dir, mode);
     const adapter = new CodexAdapter({ ...f.config, codexBin: fake.bin, requestTimeoutMs: 5000, turnTimeoutMs: mode === 'timeout' ? 150 : 3000 }, f.store);
     try {
-      await assert.rejects(adapter.turn('hi', 'one', async () => ({})), mode === 'exit' || mode === 'timeout' || mode === 'notification-error' || mode === 'malformed' ? UncertainError : Error);
+      await assert.rejects(adapter.turn('hi', 'one', async () => ({})), mode === 'exit' || mode === 'timeout' || mode === 'notification-error' || mode === 'malformed' || mode === 'oversized-final' ? UncertainError : Error);
       assert.equal(records(fake.log).filter(r => r.method === 'turn/start').length, 1);
     } finally { adapter.close(); await f.close(); }
   });
 }
+
+test('speech credentials are not inherited by the Codex reasoning subprocess', async () => {
+  const f = fixture(); const fake = fakeCodex(f.dir);
+  const previous = process.env.OPENAI_API_KEY;
+  const previousEleven = process.env.ELEVEN_API_KEY;
+  process.env.ELEVEN_API_KEY = "synthetic-eleven-only-test-key";
+  process.env.OPENAI_API_KEY = 'synthetic-speech-only-test-key';
+  const adapter = new CodexAdapter({ ...f.config, codexBin: fake.bin }, f.store);
+  try {
+    await adapter.turn('hi', 'speech-isolation', async () => ({}));
+    assert.equal(records(fake.log)[0]!.speechKeyPresent, false);
+    assert.equal(records(fake.log)[0]!.elevenKeyPresent, false);
+  } finally {
+    adapter.close();
+    if (previous === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previous;
+    if (previousEleven === undefined) delete process.env.ELEVEN_API_KEY;
+    else process.env.ELEVEN_API_KEY = previousEleven;
+    await f.close();
+  }
+});
 
 test('Codex missing executable rejects pending initialize and closes cleanly', async () => {
   const f = fixture(); const adapter = new CodexAdapter({ ...f.config, codexBin: join(f.dir, 'missing') }, f.store);
   try { await assert.rejects(adapter.turn('hi', 'one', async () => ({})), UncertainError); }
   finally { adapter.close(); await f.close(); }
 });
+
+
+for (const mode of ['stream', 'early-stream', 'seal', 'mutating-stream', 'reading-stream']) {
+  test(`Codex ${mode}: correlated final speech, commentary filtering and execution gate`, async () => {
+    const f = fixture(); const fake = fakeCodex(f.dir, mode);
+    const adapter = new CodexAdapter({ ...f.config, codexBin: fake.bin }, f.store);
+    const chunks: string[] = []; let completed = false; let calls = 0; let readFinished = false;
+    try {
+      const answer = adapter.turn('hi', 'stream-one', async () => {
+        calls++; await Promise.resolve(); readFinished = true; return { operationId: 'queued-child' };
+      }, text => { assert.equal(completed, false); if (mode === 'reading-stream') assert.ok(readFinished); chunks.push(text); });
+      assert.equal(await answer, 'First. Second.'); completed = true;
+      assert.equal(chunks.join(''), mode === 'mutating-stream' ? '' : 'First. Second.');
+      assert.equal(calls, ['mutating-stream', 'reading-stream'].includes(mode) ? 1 : 0);
+      if (mode === 'seal') assert.equal((records(fake.log).find(r => r.id === 'late')!.result as {success: boolean}).success, false);
+    } finally { adapter.close(); await f.close(); }
+  });
+}

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:livekit_client/livekit_client.dart' show TranscriptionSegment;
 import 'package:orchestrator/voice/voice_controller.dart';
 
 import 'fakes.dart';
@@ -80,6 +81,95 @@ void main() {
     expect(native.stops, greaterThan(0));
     expect(media.connections, 0);
   });
+
+  test('caption transport only admits the local transcribed speaker', () {
+    final now = DateTime.utc(2026);
+    final segments = [
+      TranscriptionSegment(
+        id: 's1',
+        text: 'Hello',
+        firstReceivedTime: now,
+        lastReceivedTime: now,
+        isFinal: false,
+        language: 'en',
+      ),
+    ];
+    expect(LiveKitVoice.userTranscripts('phone', 'agent', segments), isEmpty);
+    expect(
+      LiveKitVoice.userTranscripts('phone', 'another-phone', segments),
+      isEmpty,
+    );
+    expect(LiveKitVoice.userTranscripts(null, 'phone', segments), isEmpty);
+    final accepted = LiveKitVoice.userTranscripts(
+      'phone',
+      'phone',
+      segments,
+    ).single;
+    expect(accepted.segmentId, 's1');
+    expect(accepted.text, 'Hello');
+    expect(accepted.isFinal, false);
+  });
+
+  test(
+    'captions replace hypotheses; old finals cannot clear newer speech',
+    () async {
+      await voice.join(api);
+      media.onUserTranscript!(const VoiceTranscript('one', 'Build'));
+      media.onUserTranscript!(const VoiceTranscript('one', 'Build the app'));
+      expect(voice.liveCaption!.text, 'Build the app');
+      media.onUserTranscript!(const VoiceTranscript('two', 'Actually'));
+      media.onUserTranscript!(
+        const VoiceTranscript('one', 'Build the app', isFinal: true),
+      );
+      expect(voice.liveCaption!.text, 'Actually');
+      media.onUserTranscript!(
+        const VoiceTranscript('two', 'Actually stop', isFinal: true),
+      );
+      expect(voice.liveCaption, isNull);
+      media.onUserTranscript!(const VoiceTranscript('two', 'Late interim'));
+      expect(voice.liveCaption, isNull);
+      expect(api.paths, [
+        '/v1/voice/token',
+      ], reason: 'Caption events never submit chat');
+    },
+  );
+
+  test(
+    'captions clear immediately on mute, reconnect, and disconnect',
+    () async {
+      await voice.join(api);
+      media.onUserTranscript!(const VoiceTranscript('one', 'Before mute'));
+      final muting = voice.toggleMute();
+      expect(voice.liveCaption, isNull);
+      await muting;
+      media.onUserTranscript!(const VoiceTranscript('muted', 'Ignore me'));
+      expect(voice.liveCaption, isNull);
+      await voice.toggleMute();
+      media.onUserTranscript!(
+        const VoiceTranscript('muted', 'Late muted packet'),
+      );
+      expect(voice.liveCaption, isNull);
+      media.onUserTranscript!(const VoiceTranscript('two', 'New speech'));
+      media.onState!('Reconnecting audio');
+      expect(voice.liveCaption, isNull);
+      media.onUserTranscript!(
+        const VoiceTranscript('offline', 'Late offline packet'),
+      );
+      expect(voice.liveCaption, isNull);
+      media.onState!('Connected');
+      media.onUserTranscript!(
+        const VoiceTranscript('three', 'After reconnect'),
+      );
+      expect(voice.liveCaption!.text, 'After reconnect');
+      final disconnecting = voice.disconnect();
+      expect(voice.liveCaption, isNull);
+      await disconnecting;
+      media.onUserTranscript!(
+        const VoiceTranscript('four', 'After disconnect'),
+      );
+      expect(voice.liveCaption, isNull);
+    },
+  );
 
   test('permission rejection never requests token or opens media', () async {
     native.deny = true;

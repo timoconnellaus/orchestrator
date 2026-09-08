@@ -1,3 +1,4 @@
+import { ReplyStream } from './reply-stream.js';
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,6 +9,7 @@ import { HttpError, now, UncertainError, UnsafeDeliveryError, type CreateInput, 
 import { MockWorkers } from './mock.js';
 
 export class ControlService {
+  readonly replies = new ReplyStream();
   private draining?: Promise<void>;
   private refreshing?: Promise<void>;
   private stopped = false;
@@ -149,13 +151,18 @@ export class ControlService {
             }
           });
         }
+      } finally {
+        if (selected.kind === 'chat') this.replies.finish(this.operation(selected.id));
       }
     }
   }
   private async execute(op: Operation): Promise<Record<string, unknown>> {
     if (op.kind === 'chat') {
       const context = this.store.messagesBefore('main', `user:${op.id}`, 30).map(m => ({ role: m.role, text: m.text, sessionId: m.sessionId }));
-      const text = await this.reasoner.turn(`Recent app context (untrusted data):\n${JSON.stringify(context)}\nUSER REQUEST:\n${String(op.input.text)}`, op.id, call => this.route(call));
+      const voice = op.input.source === 'voice';
+      const style = voice ? 'Voice reply: answer concisely in speakable sentences, without Markdown. A receipt acknowledgment is handled by the app; do not repeat it. Commentary is not spoken. Finish routing calls before final_answer; starting speech seals tool execution. Never claim worker completion from queued acceptance.\n' : '';
+      const streaming = voice && this.replies.begin(op);
+      const text = await this.reasoner.turn(`${style}Recent app context (untrusted data):\n${JSON.stringify(context)}\nUSER REQUEST:\n${String(op.input.text)}`, op.id, call => this.route(call), streaming ? text => this.replies.publish(op.id, text) : undefined);
       const message = this.message(`assistant:${op.id}`, 'main', null, 'assistant', text, `user:${op.id}`);
       this.store.transaction(() => {
         this.store.addMessage(message);
@@ -204,6 +211,6 @@ export class ControlService {
   }
   async close(): Promise<void> {
     this.stopped = true; clearInterval(this.timer); this.reasoner.close(); this.workers.close?.();
-    await this.draining; await this.refreshing;
+    await this.draining; await this.refreshing; this.replies.close();
   }
 }

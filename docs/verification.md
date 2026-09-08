@@ -4,17 +4,71 @@
 
 | Check | Observed result |
 | --- | --- |
-| Combined scripts/check.sh gate | PASS: 141 tests total (35 control, 19 worker tools, 57 voice, 30 Flutter), plus configured type/lint/analyzer checks |
+| Combined scripts/check.sh gate | PASS: 202 tests total (56 control, 19 worker tools, 93 voice, 34 Flutter), plus configured type/lint/analyzer checks |
 | Worker tools TypeScript + tests | 19 tests pass, including deferred Pi flag loading and real MCP stdio EOF cancellation |
-| Control TypeScript + deterministic tests + build | 35 tests pass; build passes, including queued-context cutoff and native-session moves |
-| Voice locked installation, Ruff, mypy, pytest | All pass; 57 tests pass in integrated checkout |
+| Control TypeScript + deterministic tests + build | 56 tests pass; build passes, including queued-context cutoff, native-session moves, pushed reply safety, and stripping both speech-provider keys from the Codex child environment |
+| Voice locked installation, Ruff, mypy, pytest | All pass; 93 tests in the final combined run. Coverage includes speech gating, capture generations, isolated utterance failures, timeouts, pushed replies, no TTS replay after partial audio, iterator cleanup, and pinned-SDK caption/acknowledgment forwarding |
 | Local LiveKit 1.13.6 transport | Two real local RTC participants exchanged reliable data and non-silent synthetic audio; no speech provider calls |
-| Flutter analyze/tests/APK in integrated checkout | Clean analysis, 30 tests pass, debug APK builds; includes no-stretch edge behavior and dragging selectable text in long main/worker histories. Fixed APK installed on emulator-5554; an actual drag moved a message 262 px without changing its width/height. Dependencies warn about future Kotlin Gradle plugin compatibility |
+| Flutter analyze/tests/APK in integrated checkout | Clean analysis, 34 tests pass, debug APK builds; live captions are tested without modifying drafts, outbox, or durable chat. The caption APK was installed on the authorized Pixel with adb reporting Success; includes no-stretch edge behavior and dragging selectable text in long main/worker histories. Earlier no-stretch APK installed on emulator-5554; an actual drag moved a message 262 px without changing its width/height. Dependencies warn about future Kotlin Gradle plugin compatibility |
 | Live Codex answer + read-only routing tool | PASS: real authenticated exact answer through HTTP; duplicate submission kept one operation; persisted thread resumed after app-server restart; exactly one real list_sessions callback. Worker mutations denied in code; no existing workers changed |
-| Emulator install/UI/reconnect | Installed only on emulator-5554; settings saved http://10.0.2.2:8790, main chat round trip, mock worker creation and worker follow-up/reply verified through the UI; app force-stop/relaunch preserved URL/history, replayed a reply created while offline exactly once, and kept voice disarmed |
+| Emulator install/UI/reconnect | Historical emulator-only run: settings saved http://10.0.2.2:8790, main chat round trip, mock worker creation and worker follow-up/reply verified through the UI; app force-stop/relaunch preserved URL/history, replayed a reply created while offline exactly once, and kept voice disarmed |
 | Real worker provisioning/delivery | Not run; existing Herdr workers were not mutated. Approved project root /Users/tim/repos is now saved in private local configuration |
 | Paid OpenAI transcription/TTS | PASS: both gpt-4o-mini-transcribe and gpt-4o-mini-tts accessible. Repeat generated 122,444-byte synthetic WAV and transcribed exactly "Orchestrator speech check." Initial short-phrase assertion failed without a saved transcript, so its cause remains unknown; this verifies access, not an accuracy benchmark. No microphone recording used |
-| Eight-hour Android screen-off/Bluetooth soak | Not run: physical-device testing not authorized yet |
+| Authorized Pixel 9a basic voice | Previous APK installed with permission; user confirmed voice worked, corroborated by successful source-voice operations and assistant replies in the journal. Private control/media use Tailscale, control port 8792. Caption update installed after explicit approval; control/voice services restarted with zero active control requests and healthy endpoints. Private STT configuration now selects gpt-live-transcribe. The updated app was observed Live and mic armed; actual caption accuracy/interruption still need user confirmation |
+| Gated gpt-live-transcribe synthetic check | PASS: actual local Silero plus production STT adapter and OpenAI; first interim 2,861 ms into a 4,588 ms clip, before commit; 5.652 audio seconds uploaded, one commit, no initial-idle uploads, no late-silence appends, no capture resets/errors; expected synthetic text present. No control/Codex endpoint or microphone used |
+| Deployed Codex credential separation | Owned Codex subprocess inspected privately after restart; speech API key absent. No process environment or key was printed |
+| Eight-hour Android screen-off/Bluetooth soak | Not run or separately authorized; Pixel installation/basic voice authorization is not endurance evidence |
+
+## Pushed reply update — not deployed
+
+The implementation worker timed out after a successful full gate; its final
+cleanup passed focused checks, and the parent reran the full gate successfully
+(197 tests). Independent control and voice reviews then identified three defects,
+all reproduced and fixed with regressions. The final combined gate passes 202
+tests with configured type/lint/build checks:
+
+- Expired queued speech streams retained capacity. Expiry now frees slots, while
+  acceptance-age checks prevent revival; rejected generation admission remains
+  final-only if capacity later becomes available.
+- SDK sentence retries could repeat partial audio: an in-memory provider failure
+  reproduced four synthesis requests under production defaults. This path now
+  makes one request and propagates the error, without mutating shared options.
+- Closing the outer TTS node at a yielded frame did not await inner cleanup.
+  Explicit iterator ownership fixes this; the regression retains the inner
+  generator so garbage collection cannot hide the problem.
+
+The default short receipt acknowledgment is emitted only after durable acceptance
+and a 750 ms delay, suppressed when answer text arrives first. A pinned-SDK,
+in-memory audio test confirms synthesis before the final control result. Native
+commentary remains muted; no new speech tool or second reasoning model was added.
+A separate real-Codex probe passed using a fresh isolated thread and the existing
+ChatGPT login: 49 text chunks for a 254-character answer; first chunk (2 characters)
+at 4,796 ms including startup, versus turn completion at 7,225 ms. The streamed
+prefix matched the canonical answer; all tools were denied and zero were called.
+No speech provider or existing worker session was involved. This verifies real
+Codex early-phase support, not phone playback timing. Phone response latency and
+audible interruption of this update remain unverified. ElevenLabs has a private
+key slot but is not selected as the voice provider.
+
+## Realtime scope and limitations
+
+The transcription-only model emits words while audio arrives; Codex remains the
+only reasoner. The adapter opens a fresh provider session per detected utterance,
+so first-caption latency includes connection setup. A separate no-audio handshake
+measured 655 ms to open and 1,103 ms to configure; the full 2,861 ms measurement
+above is the relevant end-to-end synthetic caption timing.
+
+The first real gated attempt failed with zero uploaded audio and insufficient
+failure diagnostics. Real local VAD and the full pipeline with a fake provider
+were then verified independently. A startup-buffer/deadline mismatch was reproduced
+and fixed; the subsequent real-provider run passed. The exact first failure cause
+was not captured. These checks do not establish noisy-microphone accuracy or
+Pixel caption latency. Actual Pixel mute/interruption/reconnect verification and
+the approved disposable scratch worker test remain pending.
+
+Utterances are bounded to 120 seconds; setup/finalization/backlog limits fail
+closed rather than executing a truncated tail. Only **control-accepted** work is
+durable; a provider commit or displayed caption alone is not control acceptance.
 
 ## Review and recovery
 

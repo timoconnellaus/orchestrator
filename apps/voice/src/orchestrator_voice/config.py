@@ -34,7 +34,7 @@ def turn_handling() -> TurnHandlingOptions:
 class Settings:
     backend_url: str = "http://127.0.0.1:8787/"
     conversation_id: str = "main"
-    stt_model: str = "gpt-4o-mini-transcribe"
+    stt_model: str = "gpt-live-transcribe"
     stt_language: str = "en"
     tts_model: str = "gpt-4o-mini-tts"
     tts_voice: str = "coral"
@@ -60,7 +60,7 @@ class Settings:
         return cls(
             backend_url=url,
             conversation_id=conversation_id,
-            stt_model=env.get("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe"),
+            stt_model=env.get("OPENAI_STT_MODEL", "gpt-live-transcribe"),
             stt_language=env.get("OPENAI_STT_LANGUAGE", "en"),
             tts_model=env.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
             tts_voice=env.get("OPENAI_TTS_VOICE", "coral"),

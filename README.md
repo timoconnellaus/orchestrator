@@ -53,7 +53,7 @@ cd apps/mobile
 flutter run -d emulator-5554
 ```
 
-The emulator default backend is `http://10.0.2.2:8787`. Edit it in Settings if needed. This checkout's private `.env` uses **8790** because another application owns 8787; the installed emulator app is configured for `http://10.0.2.2:8790`. Development/testing authorization is **emulator only**; installing on a physical phone is a separate step.
+The emulator default backend is `http://10.0.2.2:8787`. Edit it in Settings if needed. This checkout's private live setup uses **8792** on the Mac's Tailscale interface; the earlier mock ports are retired. Installation on the connected **Pixel 9a** was explicitly authorized, and basic real-phone voice worked. Target devices explicitly; do not install on other connected devices.
 
 ## Enable voice
 
@@ -76,7 +76,15 @@ node scripts/run.mjs voice
 
 Enable listening while the app is visible and grant microphone permission. The Android notification shows the armed microphone. Voice unavailable does not disable text chat.
 
-The shipped local config advertises loopback media addresses. It is suitable for Mac-side transport tests, **not a claim that emulator or remote-phone media routing is configured**. Set a reachable `LIVEKIT_NODE_IP` and verify WebRTC connectivity for your chosen client network before expecting audio.
+Fresh local configuration defaults to loopback. For a phone, set a reachable `LIVEKIT_NODE_IP` and verify actual WebRTC audio, not just signaling. The current private Pixel setup uses Tailscale for both control and media.
+
+### Live transcription
+
+The source default is **`gpt-live-transcribe`**, using a dedicated transcription-only session. Local Silero VAD uploads speech plus short pre-roll/end padding; idle audio is not continuously sent to OpenAI. A fresh realtime connection opens for each detected utterance and closes after its final transcript; no provider connection or audio upload is needed during idle periods. The phone-to-Mac microphone stream remains active until muted. Codex remains the only reasoner.
+
+The main chat shows a transient **“Hearing… · not yet sent”** caption. It clears on finalization, mute or disconnect and never changes the typed draft, submits chat, or creates saved messages. Only finalized end-of-turn text enters durable control. `OPENAI_STT_MODEL=gpt-4o-mini-transcribe` retains the cheaper buffered fallback, without while-speaking captions.
+
+OpenAI currently lists live transcription at **$0.017/audio minute** (about $1.02/hour of submitted audio), with no charge for an idle connection itself; TTS is separate. See [pricing](https://developers.openai.com/api/docs/pricing) and the [protocol research and bounded evidence](docs/research/realtime-transcription.md). These are not eight-hour endurance or microphone-accuracy guarantees. Source changes are not proof that an existing running service has been updated.
 
 ## Tailscale deployment
 
@@ -113,10 +121,27 @@ This creates an isolated loopback control server and temporary SQLite database. 
 ## Known limits to verify
 
 - Eight-hour screen-off battery, microphone and Bluetooth reliability require a physical-device soak test. Emulator tests cannot establish this.
-- Continuous capture can transmit ambient audio to the Mac; speech providers may receive it depending on endpointing. VAD does not establish speaker identity or intent.
+- Continuous capture transmits ambient audio to the Mac. The live STT gate submits detected speech with short onset/end padding, including any false positives. VAD does not establish speaker identity or intent.
 - Starting or restarting microphone capture from the Android background is restricted. The app must not silently re-arm after stop or process death.
 - Native notification **Stop & close app** is a conservative MVP fallback that closes this app to guarantee microphone release. Ordinary in-app disarm is graceful.
 - Barge-in stops speech consumption/playback, not already accepted coding work. Long-running results remain available in chat after interruption.
 - Voice announcements for unsolicited worker replies, richer approvals, and automatic repair of uncertain operations are not assumed complete; inspect module READMEs and verification notes.
 
 Implementation interfaces: [contract](docs/contract.md). Initial ownership: [build lanes](docs/build-lanes.md).
+
+### Pushed voice replies (source update)
+
+Voice no longer waits for a one-second completion poll. Eligible, explicitly
+identified Codex final-answer text can flow to sentence-based TTS while Codex
+finishes. Mutating turns and unphased legacy responses remain final-only; once
+an early answer starts, further routing tools are refused. A slow request gets
+one delayed "Got it." **after durable acceptance**, not a claim that coding is
+complete. Fast answers suppress this receipt. Native commentary remains muted;
+no additional speech tool is required for the acknowledgment.
+
+Interrupted/lost streams never automatically replay speech or cancel accepted
+work; the final answer remains in chat. See the [reply contract](docs/contract.md#transient-pushed-voice-replies).
+`ELEVEN_API_KEY` is reserved for later TTS selection and excluded from Codex's
+environment; adding it does not switch the running provider. This source update
+requires a coordinated control/voice restart and separate Pixel latency/listening
+verification; offline tests are not a phone performance or voice-quality result.

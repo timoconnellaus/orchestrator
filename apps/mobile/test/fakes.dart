@@ -109,6 +109,8 @@ class FakeVoice implements VoiceBackend {
   @override
   void Function(String)? onState;
   @override
+  void Function(VoiceTranscript)? onUserTranscript;
+  @override
   Future<void> connect(String url, String token) async {
     connections++;
     await connecting?.future;

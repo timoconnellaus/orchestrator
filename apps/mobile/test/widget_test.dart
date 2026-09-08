@@ -111,6 +111,44 @@ void main() {
     );
   }
 
+  testWidgets(
+    'live captions are transient and leave drafts and durable chat untouched',
+    (tester) async {
+      initializeFakes();
+      api.voiceConfigured = true;
+      await store.initialize();
+      await tester.pumpWidget(OrchestratorApp(store: store, voice: voice));
+      await voice.join(api);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Message'),
+        'Keep my draft',
+      );
+      final media = voice.backend as FakeVoice;
+      media.onUserTranscript!(const VoiceTranscript('caption', 'Check'));
+      await tester.pump();
+      expect(find.text('Hearing… · not yet sent'), findsOneWidget);
+      expect(find.text('Check'), findsOneWidget);
+      media.onUserTranscript!(
+        const VoiceTranscript('caption', 'Check the sessions'),
+      );
+      await tester.pump();
+      expect(find.text('Check'), findsNothing);
+      expect(find.text('Check the sessions'), findsOneWidget);
+      expect(find.text('Keep my draft'), findsOneWidget);
+      expect(store.messages, isEmpty);
+      expect(store.outbox, isEmpty);
+      expect(api.paths, ['/v1/voice/token']);
+      media.onUserTranscript!(
+        const VoiceTranscript('caption', 'Check the sessions', isFinal: true),
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('live-voice-caption')), findsNothing);
+      expect(store.messages, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('history bubbles, session status, worker thread and composer', (
     tester,
   ) async {

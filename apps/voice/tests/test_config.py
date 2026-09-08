@@ -10,7 +10,7 @@ def test_defaults_and_no_speculation_or_idle_limits():
     settings = Settings.from_env({})
     assert settings.backend_url == "http://127.0.0.1:8787/"
     assert settings.conversation_id == "main"
-    assert settings.stt_model == "gpt-4o-mini-transcribe"
+    assert settings.stt_model == "gpt-live-transcribe"
     assert settings.tts_model == "gpt-4o-mini-tts"
     assert settings.tts_voice == "coral"
     options = turn_handling()

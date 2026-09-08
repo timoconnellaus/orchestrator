@@ -1245,6 +1245,7 @@ name = "orchestrator-voice"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "httpx" },
     { name = "livekit-agents", extra = ["openai", "silero"] },
     { name = "openai" },
@@ -1260,6 +1261,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.12,<4" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "livekit-agents", extras = ["openai", "silero"], specifier = "==1.5.12" },
     { name = "openai", specifier = ">=2,<3" },

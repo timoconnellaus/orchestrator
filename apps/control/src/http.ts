@@ -61,6 +61,34 @@ export function createHttpServer(service: ControlService) {
     if (method === 'POST' && messages) return respond(response, 202, { operationId: service.send(pathId(messages[1]!), await jsonBody(request)).id });
     const session = /^\/v1\/sessions\/([^/]+)$/.exec(path);
     if (method === 'GET' && session) return respond(response, 200, { session: service.session(pathId(session[1]!)) });
+    const reply = /^\/v1\/operations\/([^/]+)\/reply$/.exec(path);
+    if (method === 'GET' && reply) {
+      if (request.headers['last-event-id'] || url.search) throw new HttpError(400, 'reply_not_resumable', 'Speech streams cannot resume');
+      const op = service.operation(pathId(reply[1]!));
+      if (streams.size >= 100) throw new HttpError(503, 'too_many_streams', 'Too many event streams');
+      let unsubscribe = () => {}; let stopped = false;
+      response.on('close', () => { stopped = true; clearInterval(heartbeat); clearTimeout(deadline); unsubscribe(); streams.delete(response); });
+      const heartbeat = setInterval(() => {
+        if (response.writableLength > 262144) response.destroy();
+        else if (!stopped) response.write(': heartbeat\n\n');
+      }, 15000); heartbeat.unref();
+      const deadline = setTimeout(() => response.destroy(), 300000); deadline.unref();
+      const start = () => {
+        if (response.headersSent) return;
+        response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
+        response.flushHeaders(); streams.add(response);
+      };
+      unsubscribe = service.replies.follow(op, event => {
+        if (stopped) return;
+        start();
+        if (response.writableLength > 262144) { response.destroy(); return; }
+        response.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (event.type !== 'text') response.end();
+      });
+      start();
+      if (stopped) unsubscribe();
+      return;
+    }
     const operation = /^\/v1\/operations\/([^/]+)$/.exec(path);
     if (method === 'GET' && operation) return respond(response, 200, { operation: service.operation(pathId(operation[1]!)) });
     if (method === 'GET' && path === '/v1/messages') {

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from typing import Any
 from uuid import uuid4, uuid5
 
 import httpx
+from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -21,6 +22,9 @@ from livekit.plugins import openai, silero
 
 from .bridge import BridgeError, ControlBridge, Turn
 from .config import AGENT_NAME, Settings, turn_handling
+from .live_transcribe import MODEL as LIVE_STT_MODEL
+from .live_transcribe import LiveTranscribeSTT
+from .reply_audio import stream_reply_audio
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +60,7 @@ class ControlAgent(Agent):
         chat_ctx: llm.ChatContext,
         tools: list[llm.Tool],
         model_settings: ModelSettings,
-    ) -> AsyncIterable[str]:
+    ) -> AsyncGenerator[str, None]:
         # The pipeline invokes this only after end-of-turn; preemptive generation
         # is disabled. Do not send history (Codex owns it), partials, or tool calls.
         latest = next(
@@ -76,18 +80,39 @@ class ControlAgent(Agent):
             text=latest.text_content,
             conversation_id=self.conversation_id,
         )
+        reply = self.bridge.stream_answer(turn)
         try:
-            yield await self.bridge.answer(turn)
+            async for text in reply:
+                yield text
         except BridgeError as error:
             logger.warning("Control result unavailable: %s", error)
-            yield error.spoken_text
-        # CancelledError deliberately propagates: stop polling/TTS, not durable work.
+            yield "\n\n" + error.spoken_text
+        finally:
+            await reply.aclose()
+        # CancelledError deliberately propagates: stop speech, not durable work.
+
+    async def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncGenerator[rtc.AudioFrame, None]:
+        provider = self.session.tts
+        if provider is None:
+            raise RuntimeError("Reply audio requires TTS")
+        audio = stream_reply_audio(provider, text, self.session.conn_options.tts_conn_options)
+        try:
+            async for frame in audio:
+                yield frame
+        finally:
+            await audio.aclose()
 
 
 def make_session(settings: Settings, vad: silero.VAD) -> AgentSession[None]:
     return AgentSession[None](
-        stt=openai.STT(
-            model=settings.stt_model, language=settings.stt_language, use_realtime=False
+        stt=(
+            LiveTranscribeSTT(vad=vad, language=settings.stt_language)
+            if settings.stt_model == LIVE_STT_MODEL
+            else openai.STT(
+                model=settings.stt_model, language=settings.stt_language, use_realtime=False
+            )
         ),
         tts=openai.TTS(model=settings.tts_model, voice=settings.tts_voice),
         vad=vad,
@@ -101,10 +126,68 @@ def room_options() -> room_io.RoomOptions:
     # from LiveKit's default room text input callback.
     return room_io.RoomOptions(
         text_input=False,
+        text_output=True,
         video_input=False,
         close_on_disconnect=True,
         delete_room_on_close=False,
     )
+
+
+def bind_capture_boundaries(room: rtc.Room, session: AgentSession[None]) -> Callable[[], None]:
+    """Reset the actual STT/VAD capture generation on microphone lifecycle events."""
+    engine = session.stt
+    if not isinstance(engine, LiveTranscribeSTT):
+        return lambda: None
+
+    def update(
+        publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant, enabled: bool
+    ) -> None:
+        linked = session.room_io.linked_participant
+        if (
+            linked is not None
+            and participant.identity == linked.identity
+            and publication.source == rtc.TrackSource.SOURCE_MICROPHONE
+        ):
+            engine.set_capture_enabled(enabled)
+
+    def muted(publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant) -> None:
+        update(publication, participant, False)
+
+    def unmuted(
+        publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ) -> None:
+        update(publication, participant, True)
+
+    def subscribed(
+        track: rtc.Track,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        update(publication, participant, not publication.muted)
+
+    def unsubscribed(
+        track: rtc.Track,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        update(publication, participant, False)
+
+    room.on("track_muted", muted)
+    room.on("track_unmuted", unmuted)
+    room.on("track_subscribed", subscribed)
+    room.on("track_unsubscribed", unsubscribed)
+    linked = session.room_io.linked_participant
+    if linked is not None:
+        for publication in linked.track_publications.values():
+            update(publication, linked, not publication.muted)
+
+    def cleanup() -> None:
+        room.off("track_muted", muted)
+        room.off("track_unmuted", unmuted)
+        room.off("track_subscribed", subscribed)
+        room.off("track_unsubscribed", unsubscribed)
+
+    return cleanup
 
 
 def prewarm(process: JobProcess) -> None:
@@ -129,6 +212,7 @@ async def entrypoint(ctx: JobContext) -> None:
     )
     ctx.add_shutdown_callback(bridge.aclose)
     session = make_session(settings, ctx.proc.userdata["vad"])
+    unbind_capture: Callable[[], None] | None = None
 
     @session.on("error")
     def on_error(event: ErrorEvent) -> None:
@@ -140,6 +224,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @session.on("close")
     def on_close(event: CloseEvent) -> None:
+        if unbind_capture is not None:
+            unbind_capture()
         logger.warning("Voice session closed reason=%s; app must reconnect", event.reason)
 
     await session.start(
@@ -148,6 +234,7 @@ async def entrypoint(ctx: JobContext) -> None:
         room_options=room_options(),
         record=False,
     )
+    unbind_capture = bind_capture_boundaries(ctx.room, session)
     # No greeting, generate_reply, idle timer, nagging, or scheduled hangup.
 
 

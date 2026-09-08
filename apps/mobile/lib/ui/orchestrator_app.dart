@@ -203,6 +203,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class VoiceBar extends StatelessWidget {
   const VoiceBar({super.key, required this.store, required this.voice});
+
+  String _captionTail(String text) {
+    final runes = text.runes.toList();
+    return runes.length <= 180
+        ? text
+        : '…${String.fromCharCodes(runes.skip(runes.length - 180))}';
+  }
+
   final AppStore store;
   final VoiceController voice;
   @override
@@ -211,6 +219,20 @@ class VoiceBar extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (voice.liveCaption != null) ...[
+          const Text(
+            'Hearing… · not yet sent',
+            style: TextStyle(fontSize: 11, color: Color(0xff8eddeb)),
+          ),
+          Text(
+            _captionTail(voice.liveCaption!.text),
+            key: const ValueKey('live-voice-caption'),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 15, height: 1.3),
+          ),
+          const SizedBox(height: 6),
+        ],
         Row(
           children: [
             Icon(

@@ -24,27 +24,29 @@ def bridge_for(handler, limits=LIMITS):
 
 
 def operation(status="succeeded", output=None, id="op-1"):
-    return httpx.Response(
-        200,
-        json={
-            "operation": {
-                "id": id,
-                "status": status,
-                "output": output if output is not None else {"text": "Done.", "messageId": "m1"},
-            }
+    event = {
+        "operationId": id,
+        "seq": 1,
+        "type": "terminal",
+        "operation": {
+            "id": id,
+            "status": status,
+            "output": output if output is not None else {"text": "Done.", "messageId": "m1"},
         },
+    }
+    return httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=f"data: {json.dumps(event)}\n\n"
     )
 
 
 async def test_http_contract_preserves_url_payload_and_operation_id():
     requests = []
-    states = iter(["queued", "running", "succeeded"])
 
     def handler(request):
         requests.append(request)
         if request.method == "POST":
             return httpx.Response(202, json={"operationId": "op-1"})
-        return operation(next(states))
+        return operation()
 
     bridge = bridge_for(handler)
     try:
@@ -56,7 +58,7 @@ async def test_http_contract_preserves_url_payload_and_operation_id():
             "source": "voice",
         }
         assert str(requests[0].url) == "http://control.test/prefix/v1/chat"
-        assert all(str(r.url).endswith("/prefix/v1/operations/op-1") for r in requests[1:])
+        assert all(str(r.url).endswith("/prefix/v1/operations/op-1/reply") for r in requests[1:])
     finally:
         await bridge.aclose()
 
@@ -236,27 +238,20 @@ async def test_invalid_success_output_is_not_spoken(output):
         await bridge.aclose()
 
 
-async def test_get_reconnects_independently_without_resubmitting():
+async def test_get_failure_never_reconnects_or_resubmits_audio():
     methods = []
-    failures = iter([404, 503, 429, "connection", "success"])
 
     def handler(request):
         methods.append(request.method)
         if request.method == "POST":
             return httpx.Response(202, json={"operationId": "op-1"})
-        failure = next(failures)
-        if failure == "connection":
-            raise httpx.ConnectError("offline")
-        if failure == "success":
-            return operation()
-        assert isinstance(failure, int)
-        return httpx.Response(failure)
+        raise httpx.ConnectError("offline")
 
     bridge = bridge_for(handler)
     try:
-        assert await bridge.answer(TURN) == "Done."
-        assert methods.count("POST") == 1
-        assert methods.count("GET") == 5
+        with pytest.raises(BridgeError, match="pending"):
+            await bridge.answer(TURN)
+        assert methods == ["POST", "GET"]
     finally:
         await bridge.aclose()
 
@@ -289,7 +284,7 @@ async def test_operation_id_is_escaped_as_one_path_segment() -> None:
     bridge = bridge_for(handler)
     try:
         assert await bridge.answer(TURN) == "Done."
-        assert paths[-1] == b"/prefix/v1/operations/opaque%2Fwith%3F%23"
+        assert paths[-1] == b"/prefix/v1/operations/opaque%2Fwith%3F%23/reply"
     finally:
         await bridge.aclose()
 
@@ -312,3 +307,155 @@ async def test_rejection_after_lost_ack_remains_unknown():
         assert attempts == 2
     finally:
         await bridge.aclose()
+
+
+class ReplyBytes(httpx.AsyncByteStream):
+    """In-memory streaming transport; cancellation closes it without cancelling work."""
+
+    def __init__(self, events, release=None, tail=None):
+        self.events = events
+        self.release = release
+        self.tail = tail or []
+        self.closed = False
+
+    async def __aiter__(self):
+        for event in self.events:
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        if self.release:
+            await self.release.wait()
+        for event in self.tail:
+            yield f"data: {json.dumps(event)}\n\n".encode()
+
+    async def aclose(self):
+        self.closed = True
+
+
+def text_event(text, seq=1, operation_id="op-1"):
+    return {"operationId": operation_id, "seq": seq, "type": "text", "text": text}
+
+
+def final_event(text="First. Second.", seq=2):
+    return {
+        "operationId": "op-1",
+        "seq": seq,
+        "type": "terminal",
+        "operation": {
+            "id": "op-1",
+            "status": "succeeded",
+            "output": {"text": text, "messageId": "m1"},
+        },
+    }
+
+
+def streaming_bridge(stream, limits=LIMITS):
+    methods = []
+
+    def handler(request):
+        methods.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(202, json={"operationId": "op-1"})
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
+
+    return bridge_for(handler, limits), methods
+
+
+async def test_incremental_reply_arrives_before_terminal_without_polling_or_final_replay():
+    release = asyncio.Event()
+    stream = ReplyBytes([text_event("First. ")], release, [final_event()])
+    bridge, methods = streaming_bridge(stream)
+    reply = bridge.stream_answer(TURN)
+    try:
+        assert await anext(reply) == "First. "
+        assert not release.is_set()
+        release.set()
+        assert [part async for part in reply] == ["Second."]
+        assert methods == ["POST", "GET"]
+        assert stream.closed
+    finally:
+        await reply.aclose()
+        await bridge.aclose()
+
+
+async def test_duplicate_frames_do_not_repeat_speech():
+    event = text_event("First. ")
+    bridge, methods = streaming_bridge(ReplyBytes([event, event, final_event()]))
+    try:
+        assert await bridge.answer(TURN) == "First. Second."
+        assert methods == ["POST", "GET"]
+    finally:
+        await bridge.aclose()
+
+
+@pytest.mark.parametrize("tail", [[], [final_event("Corrected reply.")]])
+async def test_loss_or_correction_after_prefix_never_replays_or_resubmits(tail):
+    bridge, methods = streaming_bridge(ReplyBytes([text_event("First. "), *tail]))
+    reply = bridge.stream_answer(TURN)
+    try:
+        assert await anext(reply) == "First. "
+        with pytest.raises(BridgeError, match="partial"):
+            await anext(reply)
+        assert [part async for part in bridge.stream_answer(TURN)] == []
+        assert methods == ["POST", "GET"]
+    finally:
+        await reply.aclose()
+        await bridge.aclose()
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        text_event("Bad", 2),
+        text_event("Bad", operation_id="other"),
+        text_event("x" * 65537),
+        {"seq": True},
+    ],
+)
+async def test_wrong_identity_gaps_and_size_fail_before_speech(event):
+    bridge, _ = streaming_bridge(ReplyBytes([event]))
+    try:
+        with pytest.raises(BridgeError, match="protocol"):
+            await bridge.answer(TURN)
+    finally:
+        await bridge.aclose()
+
+
+async def test_interruption_after_partial_closes_stream_without_cancelling_work():
+    stream = ReplyBytes([text_event("First. ")], asyncio.Event())
+    bridge, methods = streaming_bridge(stream)
+    reply = bridge.stream_answer(TURN)
+    assert await anext(reply) == "First. "
+    await reply.aclose()
+    assert stream.closed
+    assert methods == ["POST", "GET"]
+    await bridge.aclose()
+
+
+async def test_delayed_receipt_ack_once_and_fast_answer_suppresses_it():
+    release = asyncio.Event()
+    stream = ReplyBytes([], release, [final_event(seq=1)])
+    bridge, methods = streaming_bridge(stream, BridgeLimits(ack_delay=0.01))
+    reply = bridge.stream_answer(TURN)
+    try:
+        assert await asyncio.wait_for(anext(reply), 1) == "Got it.\n\n"
+        release.set()
+        assert [part async for part in reply] == ["First. Second."]
+        assert methods == ["POST", "GET"]
+    finally:
+        await reply.aclose()
+        await bridge.aclose()
+    fast, _ = streaming_bridge(ReplyBytes([final_event(seq=1)]))
+    try:
+        assert [part async for part in fast.stream_answer(TURN)] == ["First. Second."]
+    finally:
+        await fast.aclose()
+
+
+async def test_cancel_while_waiting_after_ack_closes_pending_read():
+    stream = ReplyBytes([], asyncio.Event())
+    bridge, methods = streaming_bridge(stream, BridgeLimits(ack_delay=0.01))
+    reply = bridge.stream_answer(TURN)
+    assert await asyncio.wait_for(anext(reply), 1) == "Got it.\n\n"
+    await reply.aclose()
+    assert stream.closed
+    assert methods == ["POST", "GET"]
+    await bridge.aclose()

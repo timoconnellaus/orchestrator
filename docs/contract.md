@@ -67,3 +67,63 @@ Use LiveKit Python official SDK, Silero VAD + suitable turn detection, OpenAI ST
 ## Testing and safety
 
 All default automated suites use deterministic mocks, temp DBs, fake Herdr/Codex subprocesses. Never mutate a real existing Herdr session in tests. Test dedup/conflicting id payload, ordering/restart ambiguity, replay, busy queue, blocked status, invalid replies, adapter process exit/errors, and path/JSON validation. Live read-only Codex/Herdr smoke test is parent-owned and must be explicit. Flutter mock client tests must work without mic/network. Native Android microphone service must be started by visible Activity/user action, have ongoing notification and stop action, stop on disarm, and handle permissions/restart honestly. No promised automatic mic restart from background. No install on physical devices.
+
+## Transient pushed voice replies
+
+`GET /v1/operations/:id/reply` follows one accepted chat operation, with
+`Content-Type: text/event-stream`, `Cache-Control: no-store`, and frames
+`data: <JSON>\n\n`. Each event contains `operationId` and a positive, contiguous
+per-attachment `seq`, plus one of:
+
+- `{type:"text", text:string}`: append-only provisional answer text.
+- `{type:"terminal", operation:Operation}`: authoritative post-commit snapshot;
+  closes the stream. Successful output remains `{text,messageId}`.
+- `{type:"unavailable"}`: transient speech expired/overflowed; closes the stream.
+
+This is **not** the durable `/v1/events` journal and is **not resumable audio**.
+Last-Event-ID and query cursors are rejected. First attachment catches up the
+bounded in-memory prefix if still running; an already terminal operation sends
+only its SQLite snapshot. Server callbacks are synchronous across snapshot and
+subscription, avoiding a lost-completion race. Limits: 16 retained in-flight
+operations, 8 listeners per operation, 2,048 text events/128 KiB per operation,
+100 HTTP streams overall, 256 KiB socket backlog, 15-second heartbeat, five-minute
+stream/retention deadlines measured from durable acceptance. Expiry immediately
+reclaims capacity; old pending operations remain ineligible by their acceptance
+time, without retaining tombstones. Generation reserves capacity before producing
+text; failed admission stays final-only even if capacity becomes available later.
+Publishing cannot recreate a missing stream or a lost prefix. Consumer failure
+never cancels reasoning or a queued worker operation.
+
+Early voice output requires an explicitly identified Codex `agentMessage` with
+`phase:"final_answer"`, matched thread/turn/item identity, no mutating routing
+calls, and no outstanding reads. Beginning early output seals all further routing
+tool execution for that turn. Mutating turns remain final-only; receipt/queued
+acceptance is not coding completion. Missing phases fall back to completed legacy
+agent text, not guessed streaming. Explicit commentary is excluded from the
+canonical answer and remains muted. Reasoning and tool payloads are never routed
+to speech. There is no added speech/progress tool.
+
+After durable POST acknowledgment, voice may emit one delayed (750 ms) "Got it."
+receipt if substantive output has not arrived. It is suppressed for fast answers
+and is absent from durable chat. An explicit paragraph flush in the pinned SDK
+sentence adapter makes this short acknowledgment synthesize without waiting for
+Codex's final sentence. Voice input receives concise speakable-answer guidance.
+
+The bridge consumes one stream with no normal completion polling/reconnection.
+It suppresses duplicate sequence numbers, fails closed on gaps/identity changes,
+and appends only a verified canonical suffix at success. A corrected canonical
+answer or interruption/loss after a prefix never triggers whole-answer replay;
+users are directed to durable chat. The bridge suppresses repeated SDK playback
+invocations over its last 128 request IDs. Same-ID ambiguous POST reconciliation
+is retained and shielded from playback cancellation. Partial speech cannot be
+retracted and is never completion evidence. TTS retries are disabled for both
+sentence synthesis and streaming providers: an error after partial audio must not
+repeat a sentence. The outer TTS node explicitly closes its inner iterator on
+cancellation or closure, rather than relying on garbage collection.
+
+`ELEVEN_API_KEY` is an optional private credential slot only; its presence does
+not enable ElevenLabs. Both it and `OPENAI_API_KEY` are stripped from the Codex
+reasoner subprocess. No provider/model/voice/endpointing settings change in this
+reply-streaming slice. Deploy compatible control before the updated voice worker;
+older control lacks this endpoint and the voice worker fails closed rather than
+silently polling or replaying.

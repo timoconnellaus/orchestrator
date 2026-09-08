@@ -32,7 +32,7 @@ export interface ToolCall { threadId: string; turnId: string; callId: string; to
 export type ToolHandler = (call: ToolCall) => Promise<Record<string, unknown>>;
 export interface Reasoner {
   readonly status: 'ready' | 'unavailable' | 'mock';
-  turn(text: string, operationId: string, tools: ToolHandler): Promise<string>;
+  turn(text: string, operationId: string, tools: ToolHandler, onText?: (text: string) => void): Promise<string>;
   close(): void;
 }
 export class HttpError extends Error {

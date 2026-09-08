@@ -1,3 +1,4 @@
+import { TurnSpeech } from './turn-speech.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { z } from 'zod';
 import type { Config } from './config.js';
@@ -23,7 +24,7 @@ export const codexProcessArgs = ['app-server', '--enable', 'code_mode_host', ...
 const envelopeSchema = z.object({ id: z.union([z.number(), z.string()]).optional(), method: z.string().optional(), params: z.unknown().optional(), result: z.unknown().optional(), error: z.unknown().optional() });
 const callSchema = z.object({ threadId: z.string(), turnId: z.string(), callId: z.string().min(1), tool: z.string(), arguments: z.unknown() });
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
-type ActiveTurn = { threadId: string; turnId?: string; tools: ToolHandler; texts: Map<string, string>; resolve: (text: string) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
+type ActiveTurn = { threadId: string; turnId?: string; tools: ToolHandler; speech: TurnSpeech; early: string[]; earlyBytes: number; resolve: (text: string) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
 
 /** Protocol pinned to Codex 0.153.4 experimental generated schemas. Uses existing CLI authentication. */
 export class CodexAdapter implements Reasoner {
@@ -43,7 +44,7 @@ export class CodexAdapter implements Reasoner {
     child?.kill('SIGKILL');
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
     this.pending.clear();
-    if (this.active) { clearTimeout(this.active.timer); this.active.reject(error); this.active = undefined; }
+    if (this.active) { clearTimeout(this.active.timer); this.active.speech.end(); this.active.reject(error); this.active = undefined; }
   }
   private write(value: unknown): void {
     if (!this.child?.stdin.writable) throw new UncertainError('Codex connection unavailable');
@@ -67,7 +68,12 @@ export class CodexAdapter implements Reasoner {
   }
   private async initialize(): Promise<string> {
     const cwd = join(dirname(this.config.db), 'reasoner'); privateDirectory(cwd);
-    const child = spawn(this.config.codexBin, codexProcessArgs, { cwd, stdio: 'pipe', env: process.env });
+    // The API key belongs to the speech worker, not the subscription-backed
+    // reasoner. Do not let speech setup expose or override Codex authentication.
+    const env = { ...process.env };
+    delete env.OPENAI_API_KEY;
+    delete env.ELEVEN_API_KEY;
+    const child = spawn(this.config.codexBin, codexProcessArgs, { cwd, stdio: 'pipe', env });
     this.child = child;
     let buffer = '';
     child.stdout.setEncoding('utf8');
@@ -117,6 +123,11 @@ export class CodexAdapter implements Reasoner {
       else pending.resolve(message.result);
       return;
     }
+    if (message.method && this.active && !this.active.turnId) {
+      const active = this.active; active.earlyBytes += line.length;
+      if (active.early.length >= 128 || active.earlyBytes > 262144) throw new Error('Early notification limit');
+      active.early.push(line); return;
+    }
     if (message.id !== undefined && message.method) {
       if (message.method !== 'item/tool/call') {
         if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method)) this.write({ id: message.id, result: { decision: 'decline' } });
@@ -126,14 +137,22 @@ export class CodexAdapter implements Reasoner {
         return;
       }
       if (++this.inboundCalls > 32) { this.inboundCalls--; throw new Error('Too many tool requests'); }
+      const owner = this.child;
       try {
         const call = callSchema.parse(message.params);
         const active = this.active;
         if (!active || call.threadId !== active.threadId || (active.turnId && call.turnId !== active.turnId)) throw new Error('Tool call outside active turn');
-        active.turnId ??= call.turnId;
-        const result = await active.tools({ ...call, arguments: call.arguments });
+        if (active.speech.sealed) throw new Error('Answer already started; tool execution sealed');
+        if (['create_session', 'send_message'].includes(call.tool)) active.speech.mutated = true;
+        active.speech.inFlight++;
+        let result: Record<string, unknown>;
+        try { result = await active.tools({ ...call, arguments: call.arguments }); }
+        finally { active.speech.inFlight--; }
+        if (this.active !== active) return;
+        active.speech.flush();
         this.write({ id: message.id, result: { contentItems: [{ type: 'inputText', text: JSON.stringify(result) }], success: true } });
       } catch {
+        if (this.child !== owner) return;
         this.write({ id: message.id, result: { contentItems: [{ type: 'inputText', text: 'Routing request rejected; check tool arguments and operation state.' }], success: false } });
       } finally { this.inboundCalls--; }
       return;
@@ -142,37 +161,46 @@ export class CodexAdapter implements Reasoner {
     const params = z.object({ threadId: z.string(), turnId: z.string().optional(), item: z.unknown().optional(), turn: z.unknown().optional(), willRetry: z.boolean().optional() }).passthrough().safeParse(message.params);
     if (!params.success || params.data.threadId !== active.threadId) return;
     if (params.data.turnId && active.turnId && params.data.turnId !== active.turnId) return;
-    if (message.method === 'item/completed') {
-      const item = z.object({ type: z.literal('agentMessage'), id: z.string(), text: z.string() }).safeParse(params.data.item);
-      if (item.success) active.texts.set(item.data.id, item.data.text);
+    if (message.method === 'item/started' || message.method === 'item/completed') {
+      if (params.data.turnId !== active.turnId) return;
+      active.speech.item(params.data.item, message.method === 'item/completed');
+    } else if (message.method === 'item/agentMessage/delta') {
+      if (params.data.turnId !== active.turnId) return;
+      active.speech.delta(params.data.itemId, params.data.delta);
     } else if (message.method === 'turn/completed') {
       const turn = z.object({ id: z.string(), status: z.string(), error: z.unknown().optional(), items: z.array(z.unknown()).optional() }).parse(params.data.turn);
       if (active.turnId && turn.id !== active.turnId) return;
+      if (active.speech.inFlight) { this.fail(new UncertainError('Codex completed with unresolved routing calls')); return; }
+      active.speech.end();
+      let text = '';
+      if (turn.status === 'completed' && !turn.error) {
+        for (const value of turn.items ?? []) active.speech.item(value, true);
+        text = active.speech.answer();
+      }
+      // Leave the promise registered until all terminal items validate, so a
+      // malformed snapshot cannot strand it after its timeout was cleared.
       clearTimeout(active.timer); this.active = undefined;
       if (turn.status !== 'completed' || turn.error) active.reject(new Error('Codex turn failed or was interrupted'));
-      else {
-        for (const value of turn.items ?? []) {
-          const item = z.object({ type: z.literal('agentMessage'), id: z.string(), text: z.string() }).safeParse(value);
-          if (item.success) active.texts.set(item.data.id, item.data.text);
-        }
-        const text = [...active.texts.values()].join('\n\n');
-        if (text.trim()) active.resolve(text); else active.reject(new Error('Codex completed without an assistant answer'));
-      }
+      else if (text.trim()) active.resolve(text);
+      else active.reject(new Error('Codex completed without an assistant answer'));
     } else if (message.method === 'error' && params.data.willRetry === false) {
       this.fail(new UncertainError('Codex reported an unrecoverable turn error'));
     }
   }
-  async turn(text: string, operationId: string, tools: ToolHandler): Promise<string> {
+  async turn(text: string, operationId: string, tools: ToolHandler, onText?: (text: string) => void): Promise<string> {
     const threadId = await this.connect();
     if (this.active) throw new Error('Codex turns must be serialized');
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => this.fail(new UncertainError('Codex turn timed out; not retried')), this.config.turnTimeoutMs);
-      const active: ActiveTurn = { threadId, tools, texts: new Map(), resolve, reject, timer }; this.active = active;
+      const active: ActiveTurn = { threadId, tools, speech: new TurnSpeech(onText), early: [], earlyBytes: 0, resolve, reject, timer }; this.active = active;
       void this.request('turn/start', { threadId, clientUserMessageId: operationId, input: [{ type: 'text', text, text_elements: [] }], approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false }, environments: [] })
         .then(result => {
           const response = z.object({ turn: z.object({ id: z.string() }) }).parse(result);
           if (active.turnId && active.turnId !== response.turn.id) throw new Error('Unexpected turn identity');
+          if (this.active !== active) return;
           active.turnId = response.turn.id;
+          const early = active.early; active.early = []; active.earlyBytes = 0;
+          for (const line of early) void this.receive(line).catch(() => this.fail(new UncertainError('Invalid Codex protocol response')));
         }).catch(error => this.fail(error as Error));
     });
   }
