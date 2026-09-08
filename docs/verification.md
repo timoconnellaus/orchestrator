@@ -16,10 +16,18 @@
 | Paid OpenAI transcription/TTS | PASS: both gpt-4o-mini-transcribe and gpt-4o-mini-tts accessible. Repeat generated 122,444-byte synthetic WAV and transcribed exactly "Orchestrator speech check." Initial short-phrase assertion failed without a saved transcript, so its cause remains unknown; this verifies access, not an accuracy benchmark. No microphone recording used |
 | Authorized Pixel 9a basic voice | Previous APK installed with permission; user confirmed voice worked, corroborated by successful source-voice operations and assistant replies in the journal. Private control/media use Tailscale, control port 8792. Caption update installed after explicit approval; control/voice services restarted with zero active control requests and healthy endpoints. Private STT configuration now selects gpt-live-transcribe. The updated app was observed Live and mic armed; actual caption accuracy/interruption still need user confirmation |
 | Gated gpt-live-transcribe synthetic check | PASS: actual local Silero plus production STT adapter and OpenAI; first interim 2,861 ms into a 4,588 ms clip, before commit; 5.652 audio seconds uploaded, one commit, no initial-idle uploads, no late-silence appends, no capture resets/errors; expected synthetic text present. No control/Codex endpoint or microphone used |
-| Deployed Codex credential separation | Owned Codex subprocess inspected privately after restart; speech API key absent. No process environment or key was printed |
+| Deployed Codex credential separation | Earlier deployed Codex subprocess inspected privately: OpenAI speech key absent. Latest code has regressions excluding both OpenAI and ElevenLabs speech keys. No process environment or key was printed |
 | Eight-hour Android screen-off/Bluetooth soak | Not run or separately authorized; Pixel installation/basic voice authorization is not endurance evidence |
 
-## Pushed reply update — not deployed
+## Pushed reply update — deployed, phone verification pending
+
+Commit `7a6f053` was deployed after explicit restart approval. Phone capture was
+stopped first; the journal had zero queued/running control operations before
+control was restarted. Control and voice HTTP health checks pass. The live
+`/v1/operations/:id/reply` endpoint returned a canonical terminal snapshot for an
+existing completed operation without creating a new request. The existing Pixel
+APK was reopened and observed `Live`, `Voice off`, `Join voice`; no reinstall or
+worker shutdown was needed. Codex initializes lazily on its first request.
 
 The implementation worker timed out after a successful full gate; its final
 cleanup passed focused checks, and the parent reran the full gate successfully
