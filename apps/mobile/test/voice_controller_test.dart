@@ -72,6 +72,21 @@ void main() {
     },
   );
 
+  test('stop during an in-flight mute leaves no active media session', () async {
+    await voice.join(api);
+    media.muting = Completer<void>();
+    final muting = voice.toggleMute();
+    await Future<void>.delayed(Duration.zero);
+
+    native.onStop!();
+    await Future<void>.delayed(Duration.zero);
+    media.muting!.complete();
+    await muting;
+
+    expect(voice.connected, false);
+    expect(native.mediaSessionStates.last, (active: false, muted: true));
+  });
+
   test(
     'notification stop disarms without allowing late media reconnect to arm',
     () async {

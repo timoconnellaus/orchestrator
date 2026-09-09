@@ -447,6 +447,7 @@ class VoiceController extends ChangeNotifier {
         _notify();
         await backend.microphone(false);
         await service.stop();
+        if (epoch != _epoch) return;
         status = 'Muted · speaker on';
         await service.setMediaSession(active: true, muted: true);
       } else {

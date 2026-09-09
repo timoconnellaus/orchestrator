@@ -116,6 +116,7 @@ class FakeVoice implements VoiceBackend {
   int disconnects = 0;
   final microphoneCalls = <bool>[];
   Completer<void>? connecting;
+  Completer<void>? muting;
   @override
   void Function(String)? onState;
   @override
@@ -134,6 +135,7 @@ class FakeVoice implements VoiceBackend {
   @override
   Future<void> microphone(bool enabled) async {
     microphoneCalls.add(enabled);
+    await muting?.future;
   }
 
   @override
