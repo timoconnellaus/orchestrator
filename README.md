@@ -74,7 +74,7 @@ node scripts/run.mjs livekit
 node scripts/run.mjs voice
 ```
 
-Enable listening while the app is visible and grant microphone permission. The Android notification shows the armed microphone. Voice unavailable does not disable text chat.
+Enable listening while the app is visible and grant microphone permission. The Android notification shows the armed microphone. While connected, the app also publishes an **Orchestrator Voice** media session, so launchers and system media controls can pause (mute), play (unmute) and stop (disconnect) the conversation; see [the mobile voice notes](apps/mobile/README.md#voice-and-android-lifecycle--important-limitations) for its limits. Voice unavailable does not disable text chat.
 
 ## Run automatically with launchd
 
