@@ -220,11 +220,30 @@ behavior unchanged and only nondefault speed sent as an override. The updated
 full gate passes **258 tests** (59 control, 19 worker tools, 135 voice, 45 Flutter),
 including configured static checks. The debug APK rebuild also passes.
 
-This update has **not been deployed, installed on a phone, microphone-tested, or
-verified against production**. No speech/model API, adb, capture, or existing
-worker operations were run for it. Hardware processing effectiveness, acoustic
+Before the deployment below, this update had **not been deployed, installed on a
+phone, microphone-tested, or verified against production**. During that offline
+work, no speech/model API, adb, capture, or existing worker operations were run. Hardware processing effectiveness, acoustic
 threshold/preset quality, phone/Mac clock agreement, real LiveKit diagnostic
 routing, Android reconnect behavior and audible interruption still need separate
 user-approved physical-device checks. A debug APK build or offline test success
 is not evidence of any of these properties. Integrate compatible control, voice,
 and mobile sources together; deploy/restart only as a separate parent-owned step.
+
+### Voice tuning deployment and silent transport verification
+
+After user approval and confirmation that voice was stopped, deployment checks
+found zero rooms, zero active voice jobs and 25 succeeded control operations with
+none unfinished. Fast-forwarded the live checkout through `1ee31c5`, rebuilt
+control, and restarted only control/voice; existing media and coding workers were
+left running. Installed the reviewed debug APK on the authorized Pixel using
+`adb install -r` (success). The unrelated emulator-audio script was untouched.
+
+An opt-in, production-token probe used a fresh owned room, custom activation 0.6
+and ElevenLabs speed 1.15, with no microphone/audio publication. It observed a
+listening agent and received actual LiveKit diagnostic packets matching the
+nonce, room, speaker, sender and custom tuning. Audio freshness correctly remained
+false. It disconnected and deleted only its owned room. Result:
+`agent_listening=true, custom_tuning_confirmed=true, diagnostics_received=true,
+audio_published=false`. This verifies live metadata/diagnostic routing, not
+physical Pixel acoustic behavior or provider speaking speed. User audition,
+stop/start, mute/reconnect checks and endurance remain separate.
