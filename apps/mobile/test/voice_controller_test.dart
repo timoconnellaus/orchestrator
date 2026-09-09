@@ -50,6 +50,29 @@ void main() {
   );
 
   test(
+    'media controls mirror voice state and control mute or disconnect',
+    () async {
+      await voice.join(api);
+      expect(native.mediaSessionStates, [(active: true, muted: false)]);
+
+      native.onPause!();
+      await Future<void>.delayed(Duration.zero);
+      expect(voice.armed, false);
+      expect(native.mediaSessionStates.last, (active: true, muted: true));
+
+      native.onPlay!();
+      await Future<void>.delayed(Duration.zero);
+      expect(voice.armed, true);
+      expect(native.mediaSessionStates.last, (active: true, muted: false));
+
+      native.onStop!();
+      await Future<void>.delayed(Duration.zero);
+      expect(voice.connected, false);
+      expect(native.mediaSessionStates.last, (active: false, muted: true));
+    },
+  );
+
+  test(
     'notification stop disarms without allowing late media reconnect to arm',
     () async {
       await voice.join(api);

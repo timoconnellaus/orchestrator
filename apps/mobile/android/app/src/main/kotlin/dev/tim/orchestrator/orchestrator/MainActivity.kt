@@ -1,8 +1,12 @@
 package dev.tim.orchestrator.orchestrator
 
 import android.Manifest
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -11,6 +15,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private var visible = false
     private var pendingArm: MethodChannel.Result? = null
+    private var mediaSession: MediaSession? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -42,6 +47,13 @@ class MainActivity : FlutterActivity() {
                     MicrophoneService.onArmed = null
                     MicrophoneService.setArmed(this, false)
                     stopService(Intent(this, MicrophoneService::class.java))
+                    result.success(null)
+                }
+
+                "mediaSession" -> {
+                    val active = call.argument<Boolean>("active") ?: false
+                    val muted = call.argument<Boolean>("muted") ?: true
+                    updateMediaSession(channel, active, muted)
                     result.success(null)
                 }
 
@@ -107,8 +119,74 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun updateMediaSession(
+        channel: MethodChannel,
+        active: Boolean,
+        muted: Boolean,
+    ) {
+        if (!active) {
+            mediaSession?.isActive = false
+            mediaSession?.release()
+            mediaSession = null
+            return
+        }
+        val session =
+            mediaSession ?: MediaSession(this, "OrchestratorVoice").also { created ->
+                val open =
+                    PendingIntent.getActivity(
+                        this,
+                        0,
+                        Intent(this, MainActivity::class.java),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                created.setSessionActivity(open)
+                created.setCallback(
+                    object : MediaSession.Callback() {
+                        override fun onPlay() {
+                            channel.invokeMethod("playRequested", null)
+                        }
+
+                        override fun onPause() {
+                            channel.invokeMethod("pauseRequested", null)
+                        }
+
+                        override fun onStop() {
+                            channel.invokeMethod("stopRequested", null)
+                        }
+                    },
+                )
+                created.setMetadata(
+                    MediaMetadata
+                        .Builder()
+                        .putString(MediaMetadata.METADATA_KEY_TITLE, "Orchestrator Voice")
+                        .putString(MediaMetadata.METADATA_KEY_ARTIST, "Voice conversation")
+                        .build(),
+                )
+                mediaSession = created
+            }
+        val actions =
+            PlaybackState.ACTION_PLAY or
+                PlaybackState.ACTION_PAUSE or
+                PlaybackState.ACTION_PLAY_PAUSE or
+                PlaybackState.ACTION_STOP
+        session.setPlaybackState(
+            PlaybackState
+                .Builder()
+                .setActions(actions)
+                .setState(
+                    if (muted) PlaybackState.STATE_PAUSED else PlaybackState.STATE_PLAYING,
+                    PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                    if (muted) 0f else 1f,
+                ).build(),
+        )
+        session.isActive = true
+    }
+
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         // Engine teardown destroys the WebRTC plugin and its native audio tracks.
+        mediaSession?.isActive = false
+        mediaSession?.release()
+        mediaSession = null
         MicrophoneService.bridge = null
         MicrophoneService.onArmed = null
         MicrophoneService.setArmed(this, false)
