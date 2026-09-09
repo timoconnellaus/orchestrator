@@ -8,6 +8,7 @@ class VoiceTuning {
     this.minSpeechMs = 50,
     this.endSilenceMs = 550,
     this.interruptionMs = 500,
+    this.elevenLabsSpeed = 1.0,
     this.echoCancellation = true,
     this.noiseSuppression = true,
     this.autoGainControl = true,
@@ -23,7 +24,7 @@ class VoiceTuning {
     endSilenceMs: 350,
     interruptionMs: 300,
   );
-  final double activationThreshold;
+  final double activationThreshold, elevenLabsSpeed;
   final int minSpeechMs, endSilenceMs, interruptionMs;
   final bool echoCancellation, noiseSuppression, autoGainControl;
 
@@ -62,6 +63,12 @@ class VoiceTuning {
       minSpeechMs: number('minSpeechMs', 50, 300).toInt(),
       endSilenceMs: number('endSilenceMs', 300, 1200).toInt(),
       interruptionMs: number('interruptionMs', 300, 1200).toInt(),
+      elevenLabsSpeed: number(
+        'elevenLabsSpeed',
+        .8,
+        1.2,
+        integer: false,
+      ).toDouble(),
       echoCancellation: flag('echoCancellation'),
       noiseSuppression: flag('noiseSuppression'),
       autoGainControl: flag('autoGainControl'),
@@ -73,6 +80,7 @@ class VoiceTuning {
     'minSpeechMs': minSpeechMs,
     'endSilenceMs': endSilenceMs,
     'interruptionMs': interruptionMs,
+    'elevenLabsSpeed': elevenLabsSpeed,
     'echoCancellation': echoCancellation,
     'noiseSuppression': noiseSuppression,
     'autoGainControl': autoGainControl,
@@ -88,7 +96,7 @@ class VoiceTuning {
     stopAudioCaptureOnMute: true,
   );
   String get summary =>
-      'Threshold ${activationThreshold.toStringAsFixed(2)} · speech $minSpeechMs ms · silence $endSilenceMs ms · interrupt $interruptionMs ms · AEC ${echoCancellation ? "on" : "off"} / NS ${noiseSuppression ? "on" : "off"} / AGC ${autoGainControl ? "on" : "off"}';
+      'Threshold ${activationThreshold.toStringAsFixed(2)} · speech $minSpeechMs ms · silence $endSilenceMs ms · interrupt $interruptionMs ms · ElevenLabs ${elevenLabsSpeed.toStringAsFixed(2)}× · AEC ${echoCancellation ? "on" : "off"} / NS ${noiseSuppression ? "on" : "off"} / AGC ${autoGainControl ? "on" : "off"}';
   @override
   bool operator ==(Object other) =>
       other is VoiceTuning && mapEquals(toJson(), other.toJson());

@@ -55,11 +55,12 @@ export const voiceTuningSchema = z.object({
   minSpeechMs: z.number().int().min(50).max(300),
   endSilenceMs: z.number().int().min(300).max(1200),
   interruptionMs: z.number().int().min(300).max(1200),
+  elevenLabsSpeed: z.number().finite().min(0.8).max(1.2),
   echoCancellation: z.boolean(), noiseSuppression: z.boolean(), autoGainControl: z.boolean(),
 }).strict();
 export type VoiceTuning = z.infer<typeof voiceTuningSchema>;
 export const defaultVoiceTuning: Readonly<VoiceTuning> = Object.freeze({
   version: 1, activationThreshold: 0.5, minSpeechMs: 50, endSilenceMs: 550,
-  interruptionMs: 500, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+  interruptionMs: 500, elevenLabsSpeed: 1.0, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
 });
 export const voiceSchema = z.object({ conversationId: z.literal('main'), voiceTuning: voiceTuningSchema.optional() }).strict();

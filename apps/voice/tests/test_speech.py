@@ -14,6 +14,7 @@ from orchestrator_voice.config import Settings
 from orchestrator_voice.live_transcribe import LiveTranscribeSTT
 from orchestrator_voice.reply_audio import stream_reply_audio
 from orchestrator_voice.speech import ElevenSentenceTTS, make_tts
+from orchestrator_voice.voice_tuning import VoiceTuning
 from orchestrator_voice.worker import make_session
 
 
@@ -56,13 +57,48 @@ class SpeechSession:
         return self.responses[index]
 
 
-def configured_provider(monkeypatch: pytest.MonkeyPatch) -> ElevenSentenceTTS:
+def configured_provider(monkeypatch: pytest.MonkeyPatch, speed: float = 1.0) -> ElevenSentenceTTS:
     monkeypatch.setenv("ELEVEN_API_KEY", "offline-only")
-    provider = make_tts(Settings(tts_provider="elevenlabs", elevenlabs_voice_id="testVoiceId123"))
+    provider = make_tts(
+        Settings(tts_provider="elevenlabs", elevenlabs_voice_id="testVoiceId123"),
+        elevenlabs_speed=speed,
+    )
     assert isinstance(provider, ElevenSentenceTTS)
     assert not provider.capabilities.streaming
     assert provider.sample_rate == 24000
     return provider
+
+
+@pytest.mark.parametrize("speed", [0.8, 1.0, 1.2])
+async def test_actual_sdk_http_payload_overrides_only_nondefault_speed(
+    monkeypatch: pytest.MonkeyPatch,
+    speed: float,
+) -> None:
+    provider = configured_provider(monkeypatch, speed)
+    http = SpeechSession(SpeechResponse())
+    monkeypatch.setattr(provider, "_ensure_session", lambda: http)
+
+    async def text() -> AsyncGenerator[str, None]:
+        yield "Speed test."
+
+    audio = stream_reply_audio(provider, text(), APIConnectOptions())
+    try:
+        async with asyncio.timeout(3):
+            async for _ in audio:
+                pass
+        assert len(http.requests) == 1
+        assert http.requests[0]["json"]["voice_settings"] == (
+            None if speed == 1.0 else {"speed": speed}
+        )
+    finally:
+        await audio.aclose()
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("speed", [0.79, 1.21, float("nan"), float("inf"), True])
+def test_speed_rejected_before_synthesis(speed: float) -> None:
+    with pytest.raises(ValueError, match="speed"):
+        ElevenSentenceTTS(model="eleven_flash_v2_5", voice_id="testVoiceId123", speed=speed)
 
 
 async def test_elevenlabs_ack_audio_arrives_before_final_text(
@@ -180,8 +216,10 @@ async def test_session_uses_selected_voice_without_changing_stt_or_turn_rules(
     session = make_session(
         Settings(tts_provider="elevenlabs", elevenlabs_voice_id="testVoiceId123"),
         Mock(spec=silero.VAD),
+        tuning=VoiceTuning(elevenLabsSpeed=1.2),
     )
     assert isinstance(session.tts, ElevenSentenceTTS)
+    assert getattr(session.tts._opts.voice_settings, "speed", None) == 1.2
     assert isinstance(session.stt, LiveTranscribeSTT)
     assert session.llm is None
     assert session.options.preemptive_generation.get("enabled") is False

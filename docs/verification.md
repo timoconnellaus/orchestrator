@@ -192,7 +192,7 @@ Mock worker results are simulated. Herdr status observation and successful model
 
 ## Voice tuning source update — offline verification only
 
-In the isolated implementation worktree, `sh scripts/check.sh` passes **249 tests**
+The initial isolated implementation's `sh scripts/check.sh` passed **249 tests**
 (59 control, 19 worker tools, 126 voice, 45 Flutter), with TypeScript builds,
 Ruff, mypy, Flutter analysis and script syntax checks clean. `flutter build apk
 --debug` also passes. Existing dependency warnings concern future Kotlin Gradle
@@ -209,6 +209,16 @@ RMS and real capture resets. Diagnostics tests cover coalescing while transport
 blocks, owned sender shutdown, stale/reset state, strict sender/room/schema/
 sequence/generation/nonce validation, fallback availability, and bounded pending
 join acknowledgement expiry. Existing offline network guards are unchanged.
+
+Independent review found the added speaking-speed requirement missing and a native
+publication leak behind coroutine cancellation. The parent reproduced three
+uncompleted FFI publications in 0.82 seconds, then changed diagnostic failure to
+disable sending for that join; the same reproduction now issues only one native
+request. A pinned-FFI regression covers the boundary. Speaking speed is now wired
+through all snapshots/contracts and the actual SDK HTTP payload, with default
+behavior unchanged and only nondefault speed sent as an override. The updated
+full gate passes **258 tests** (59 control, 19 worker tools, 135 voice, 45 Flutter),
+including configured static checks. The debug APK rebuild also passes.
 
 This update has **not been deployed, installed on a phone, microphone-tested, or
 verified against production**. No speech/model API, adb, capture, or existing

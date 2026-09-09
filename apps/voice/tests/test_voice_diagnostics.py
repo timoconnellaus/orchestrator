@@ -1,10 +1,13 @@
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from livekit.agents import vad
+from livekit.rtc import participant as rtc_participant
+from livekit.rtc._ffi_client import FfiClient
 from test_live_transcribe import SocketHarness, marker
 
 from orchestrator_voice.voice_diagnostics import VoiceDiagnostics
@@ -126,6 +129,7 @@ async def test_one_owned_sender_coalesces_blocked_transport_and_closes() -> None
         await asyncio.sleep(0.01)
         for _ in range(1000):
             meter.observe(event(vad.VADEventType.INFERENCE_DONE, 8192), speech=True)
+        blocked.set()  # Brief backpressure resolves before the native-send deadline.
         await asyncio.sleep(0.4)
         assert maximum == 1
         assert 1 <= len(sent) <= 3
@@ -136,6 +140,47 @@ async def test_one_owned_sender_coalesces_blocked_transport_and_closes() -> None
     count = len(sent)
     await asyncio.sleep(0.25)
     assert len(sent) == count and concurrent == 0 and meter._task is None
+
+
+async def test_native_publication_timeout_disables_sender_for_join(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kinds: list[list[str]] = []
+
+    class Queue:
+        def subscribe(self) -> "Queue":
+            return self
+
+        def unsubscribe(self, _waiter: object) -> None:
+            pass
+
+        async def wait_for(self, _predicate: object) -> None:
+            await asyncio.Event().wait()  # Native callback never arrives.
+
+    class Ffi:
+        queue = Queue()
+
+        def request(self, request: Any) -> SimpleNamespace:
+            kinds.append([field.name for field, _ in request.ListFields()])
+            return SimpleNamespace(publish_data=SimpleNamespace(async_id=len(kinds)))
+
+    monkeypatch.setattr(FfiClient, "instance", Ffi())
+    local: Any = SimpleNamespace(_ffi_handle=SimpleNamespace(handle=1))
+
+    async def send(payload: bytes) -> None:
+        await rtc_participant.LocalParticipant.publish_data(local, payload, reliable=False)
+
+    meter = diagnostics(send)
+    meter.probe(b'{"nonce":"one"}', "phone")
+    meter.start()
+    try:
+        await asyncio.sleep(0.4)
+        meter.probe(b'{"nonce":"two"}', "phone")
+        meter.start()  # A new capture nonce must not reopen an ambiguous native send.
+        await asyncio.sleep(0.4)
+        assert kinds == [["publish_data"]]
+    finally:
+        await meter.aclose()
 
 
 async def test_live_transcribe_guarded_seam_mute_generation_and_dispose() -> None:

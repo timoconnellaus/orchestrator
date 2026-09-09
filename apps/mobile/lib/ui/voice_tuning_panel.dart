@@ -34,28 +34,28 @@ class _VoiceTuningPanelState extends State<VoiceTuningPanel> {
     int divisions,
   ) {
     final value = (_draft.toJson()[key] as num).toDouble();
+    final fractional = key == 'activationThreshold' || key == 'elevenLabsSpeed';
+    String format(double v) => key == 'elevenLabsSpeed'
+        ? '${v.toStringAsFixed(2)}×'
+        : fractional
+        ? v.toStringAsFixed(2)
+        : '${v.round()} ms';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '$label: ${key == 'activationThreshold' ? value.toStringAsFixed(2) : '${value.round()} ms'}',
-        ),
+        Text('$label: ${format(value)}'),
         Slider(
           value: value,
           min: low,
           max: high,
           divisions: divisions,
-          semanticFormatterCallback: (v) => key == 'activationThreshold'
-              ? v.toStringAsFixed(2)
-              : '${v.round()} milliseconds',
+          semanticFormatterCallback: format,
           onChanged: _saving
               ? null
               : (v) => setState(() {
                   _draft = _draft.withValue(
                     key,
-                    key == 'activationThreshold'
-                        ? double.parse(v.toStringAsFixed(2))
-                        : v.round(),
+                    fractional ? double.parse(v.toStringAsFixed(2)) : v.round(),
                   );
                 }),
         ),
@@ -123,6 +123,17 @@ class _VoiceTuningPanelState extends State<VoiceTuningPanel> {
               _slider('Interruption duration', 'interruptionMs', 300, 1200, 90),
               const Text(
                 'Local silence only tunes Mac speech detection. Transcription and endpointing also affect response time; SDK endpoint delay stays 0.8–3 seconds.',
+              ),
+              const SizedBox(height: 12),
+              _slider(
+                'ElevenLabs speaking speed',
+                'elevenLabsSpeed',
+                .8,
+                1.2,
+                8,
+              ),
+              const Text(
+                'ElevenLabs only; OpenAI ignores this setting. 1.0× keeps the current voice defaults. Changes speaking rate, not the delay before audio starts.',
               ),
               const SizedBox(height: 12),
               const Text(

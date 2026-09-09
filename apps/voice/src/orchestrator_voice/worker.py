@@ -125,7 +125,7 @@ def make_session(
                 model=settings.stt_model, language=settings.stt_language, use_realtime=False
             )
         ),
-        tts=make_tts(settings),
+        tts=make_tts(settings, elevenlabs_speed=tuning.elevenLabsSpeed),
         vad=vad,
         turn_handling=turn_handling(tuning),
         user_away_timeout=None,

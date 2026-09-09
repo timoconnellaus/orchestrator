@@ -48,6 +48,8 @@ void main() {
       ...fixture['invalidOverrides'] as List,
       {'activationThreshold': double.nan},
       {'activationThreshold': double.infinity},
+      {'elevenLabsSpeed': double.nan},
+      {'elevenLabsSpeed': double.infinity},
     ]) {
       expect(
         () => VoiceTuning.fromJson({
@@ -95,10 +97,11 @@ void main() {
       final api = FakeApi();
       final store = AppStore(preferences, apiFactory: (_) => api);
       await store.initialize();
-      await store.saveVoiceTuning(VoiceTuning.noisyRoom);
+      final saved = VoiceTuning.noisyRoom.withValue('elevenLabsSpeed', 1.15);
+      await store.saveVoiceTuning(saved);
       final restored = AppStore(preferences, apiFactory: (_) => api);
       await restored.initialize();
-      expect(restored.savedVoiceTuning, VoiceTuning.noisyRoom);
+      expect(restored.savedVoiceTuning, saved);
       expect(
         preferences.read('snapshot:${store.url}'),
         isNot(contains('voiceTuning')),
@@ -133,7 +136,8 @@ void main() {
       final voice = VoiceController(media, FakeMicrophoneService());
       final joining = voice.join(api, tuning: store.savedVoiceTuning);
       await Future<void>.delayed(Duration.zero);
-      await store.saveVoiceTuning(VoiceTuning.noisyRoom);
+      final next = VoiceTuning.noisyRoom.withValue('elevenLabsSpeed', 1.2);
+      await store.saveVoiceTuning(next);
       expect(voice.activeTuning, VoiceTuning.defaults);
       expect(media.microphoneCalls, isEmpty);
       media.connecting!.complete();
@@ -150,7 +154,7 @@ void main() {
       ); // token echo isn't Mac confirmation
       await voice.disconnect();
       await voice.join(api, tuning: store.savedVoiceTuning);
-      expect(media.joinOptions!.tuning, VoiceTuning.noisyRoom);
+      expect(media.joinOptions!.tuning, next);
       voice.dispose();
       store.dispose();
       await api.stream.close();
@@ -273,7 +277,7 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(Slider), findsNWidgets(4));
+      expect(find.byType(Slider), findsNWidgets(5));
       await tester.ensureVisible(find.byType(Slider).first);
       await tester.drag(find.byType(Slider).first, const Offset(30, 0));
       await tester.pumpAndSettle();
@@ -286,11 +290,18 @@ void main() {
       await tester.tap(find.text('Noisy room'));
       await tester.pumpAndSettle();
       expect(find.text('Unsaved draft'), findsOneWidget);
+      final speed = tester.widget<Slider>(find.byType(Slider).at(4));
+      expect(speed.min, .8);
+      expect(speed.max, 1.2);
+      speed.onChanged!(1.2);
+      await tester.pumpAndSettle();
+      expect(find.text('ElevenLabs speaking speed: 1.20×'), findsOneWidget);
+      final expected = VoiceTuning.noisyRoom.withValue('elevenLabsSpeed', 1.2);
       final save = find.text('Save for next join');
       await tester.ensureVisible(save);
       await tester.tap(save);
       await tester.pumpAndSettle();
-      expect(store.savedVoiceTuning, VoiceTuning.noisyRoom);
+      expect(store.savedVoiceTuning, expected);
       expect(voice.activeTuning, VoiceTuning.defaults);
       expect(
         find.text('Saved settings differ from this join.'),
@@ -301,7 +312,7 @@ void main() {
       await tester.ensureVisible(reset);
       await tester.tap(reset);
       await tester.pumpAndSettle();
-      expect(store.savedVoiceTuning, VoiceTuning.noisyRoom);
+      expect(store.savedVoiceTuning, expected);
       memory.fail = true;
       await tester.ensureVisible(save);
       await tester.tap(save);
@@ -314,7 +325,7 @@ void main() {
       await tester.tap(find.text('Echo cancellation (AEC)'));
       await tester.pumpAndSettle();
       expect(find.textContaining('assistant hear itself'), findsOneWidget);
-      expect(store.savedVoiceTuning, VoiceTuning.noisyRoom);
+      expect(store.savedVoiceTuning, expected);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       voice.dispose();

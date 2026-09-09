@@ -13,6 +13,7 @@ class VoiceTuning:
     minSpeechMs: int = 50
     endSilenceMs: int = 550
     interruptionMs: int = 500
+    elevenLabsSpeed: float = 1.0
     echoCancellation: bool = True
     noiseSuppression: bool = True
     autoGainControl: bool = True
@@ -22,12 +23,13 @@ class VoiceTuning:
             raise ValueError("Unsupported voice tuning version")
         for name, low, high in (
             ("activationThreshold", 0.3, 0.8),
+            ("elevenLabsSpeed", 0.8, 1.2),
             ("minSpeechMs", 50, 300),
             ("endSilenceMs", 300, 1200),
             ("interruptionMs", 300, 1200),
         ):
             value = getattr(self, name)
-            types = (int, float) if name == "activationThreshold" else (int,)
+            types = (int, float) if name in ("activationThreshold", "elevenLabsSpeed") else (int,)
             if type(value) not in types or not math.isfinite(value) or not low <= value <= high:
                 raise ValueError(f"Invalid {name}")
         for name in ("echoCancellation", "noiseSuppression", "autoGainControl"):

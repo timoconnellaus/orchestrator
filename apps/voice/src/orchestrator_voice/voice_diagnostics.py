@@ -104,8 +104,11 @@ class VoiceDiagnostics:
                 try:
                     await asyncio.wait_for(self._send(self.packet()), timeout=0.15)
                 except Exception:
-                    # Diagnostics are lossy and never break speech or retry packets.
-                    pass
+                    # Cancelling the pinned SDK waiter does not cancel its native
+                    # publication. Disable diagnostics for this join after any
+                    # ambiguous failure; a new send could otherwise accumulate
+                    # native requests. Speech continues; the phone expires meters.
+                    return
             await asyncio.sleep(0.2)
 
     async def aclose(self) -> None:

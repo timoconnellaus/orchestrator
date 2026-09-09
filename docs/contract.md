@@ -142,6 +142,7 @@ booleans, noninteger durations and out-of-range values are rejected):
 | `minSpeechMs` | 50–300 integer ms | 50 |
 | `endSilenceMs` | 300–1200 integer ms | 550 |
 | `interruptionMs` | 300–1200 integer ms | 500 |
+| `elevenLabsSpeed` | 0.8–1.2×, ElevenLabs only | 1.0 |
 | `echoCancellation`, `noiseSuppression`, `autoGainControl` | boolean | true |
 
 The response includes canonical `voiceTuning`, `room`, and linked phone `speaker`
@@ -170,11 +171,17 @@ Interruption minimum follows the snapshot; SDK endpointing remains fixed at
 0.8/3 seconds. Pre-roll, the **0.55 second overflow readmission silence**, all
 upload/buffer/backlog/generation/watchdog limits, no retry/replay, no speculative
 generation/TTS, and no false-interruption resume are unchanged.
+ElevenLabs speed follows the same per-join snapshot. At 1.0 the existing request
+is unchanged; otherwise only speed is sent as a request-local voice setting.
+OpenAI ignores this field. See [the adapter note](research/elevenlabs-speed.md).
 
 Diagnostics use lossy named LiveKit topic `orchestrator.voice.diagnostics.v1` to
 only the session's linked local speaker. The agent uses one owned coalescing
 sender task (at most about 5 Hz, 150 ms send timeout, latest state only, closed at
-job shutdown). No network awaits or per-frame tasks are added to VAD handling.
+job shutdown). An ambiguous send failure disables diagnostics for the remainder
+of that join: cancelling the SDK waiter does not cancel a native publication,
+so another native send must not be launched after a timeout. Meters expire while
+speech continues. No network awaits or per-frame tasks are added to VAD handling.
 After existing generation/enabled/staleness guards, incremental INFERENCE_DONE
 frames supply normalized PCM RMS in [0,1]; START/END and the local gate determine
 speech state (inference can precede the state transition). Capture resets/mute
