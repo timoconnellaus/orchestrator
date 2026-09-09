@@ -116,6 +116,7 @@ class FakeVoice implements VoiceBackend {
   int disconnects = 0;
   final microphoneCalls = <bool>[];
   Completer<void>? connecting;
+  Completer<void>? muting;
   @override
   void Function(String)? onState;
   @override
@@ -134,6 +135,7 @@ class FakeVoice implements VoiceBackend {
   @override
   Future<void> microphone(bool enabled) async {
     microphoneCalls.add(enabled);
+    await muting?.future;
   }
 
   @override
@@ -146,6 +148,11 @@ class FakeMicrophoneService implements MicrophoneService {
   int starts = 0;
   int stops = 0;
   bool deny = false;
+  final mediaSessionStates = <({bool active, bool muted})>[];
+  @override
+  void Function()? onPlay;
+  @override
+  void Function()? onPause;
   @override
   void Function()? onStop;
   @override
@@ -157,5 +164,13 @@ class FakeMicrophoneService implements MicrophoneService {
   @override
   Future<void> stop() async {
     stops++;
+  }
+
+  @override
+  Future<void> setMediaSession({
+    required bool active,
+    required bool muted,
+  }) async {
+    mediaSessionStates.add((active: active, muted: muted));
   }
 }

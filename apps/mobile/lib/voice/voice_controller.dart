@@ -205,26 +205,54 @@ class LiveKitVoice implements VoiceBackend {
 abstract class MicrophoneService {
   Future<void> start();
   Future<void> stop();
+  Future<void> setMediaSession({required bool active, required bool muted});
+  void Function()? onPlay;
+  void Function()? onPause;
   void Function()? onStop;
 }
 
 class AndroidMicrophoneService implements MicrophoneService {
   AndroidMicrophoneService() {
     _channel.setMethodCallHandler((call) async {
-      if (call.method == 'stopRequested') onStop?.call();
+      switch (call.method) {
+        case 'playRequested':
+          onPlay?.call();
+        case 'pauseRequested':
+          onPause?.call();
+        case 'stopRequested':
+          onStop?.call();
+      }
     });
   }
   static const _channel = MethodChannel('dev.tim.orchestrator/microphone');
+  @override
+  void Function()? onPlay;
+  @override
+  void Function()? onPause;
   @override
   void Function()? onStop;
   @override
   Future<void> start() async => _channel.invokeMethod<void>('arm');
   @override
   Future<void> stop() async => _channel.invokeMethod<void>('disarm');
+  @override
+  Future<void> setMediaSession({
+    required bool active,
+    required bool muted,
+  }) async => _channel.invokeMethod<void>('mediaSession', {
+    'active': active,
+    'muted': muted,
+  });
 }
 
 class VoiceController extends ChangeNotifier {
   VoiceController(this.backend, this.service) {
+    service.onPlay = () {
+      if (connected && !armed && !busy) unawaited(toggleMute());
+    };
+    service.onPause = () {
+      if (connected && armed && !busy) unawaited(toggleMute());
+    };
     service.onStop = () {
       unawaited(disconnect());
     };
@@ -384,6 +412,7 @@ class VoiceController extends ChangeNotifier {
       armed = true;
       _captionsReady = true;
       status = 'Listening · mic armed';
+      await service.setMediaSession(active: true, muted: false);
       final pending = _pendingDiagnostics;
       _pendingDiagnostics = null;
       if (pending != null) {
@@ -418,7 +447,9 @@ class VoiceController extends ChangeNotifier {
         _notify();
         await backend.microphone(false);
         await service.stop();
+        if (epoch != _epoch) return;
         status = 'Muted · speaker on';
+        await service.setMediaSession(active: true, muted: true);
       } else {
         await service.start();
         if (epoch != _epoch) return;
@@ -429,6 +460,7 @@ class VoiceController extends ChangeNotifier {
         }
         armed = true;
         status = 'Listening · mic armed';
+        await service.setMediaSession(active: true, muted: false);
       }
     } catch (e) {
       error = 'Microphone unavailable: $e';
@@ -451,7 +483,11 @@ class VoiceController extends ChangeNotifier {
     try {
       await backend.disconnect();
     } finally {
-      await service.stop();
+      try {
+        await service.setMediaSession(active: false, muted: true);
+      } finally {
+        await service.stop();
+      }
     }
   }
 
@@ -485,6 +521,8 @@ class VoiceController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    service.onPlay = null;
+    service.onPause = null;
     service.onStop = null;
     backend.onState = null;
     backend.onUserTranscript = null;
