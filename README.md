@@ -76,6 +76,37 @@ node scripts/run.mjs voice
 
 Enable listening while the app is visible and grant microphone permission. The Android notification shows the armed microphone. Voice unavailable does not disable text chat.
 
+## Run automatically with launchd
+
+On the Mac that hosts Orchestrator, install the control, LiveKit, and voice processes as per-user LaunchAgents:
+
+```sh
+sh scripts/service.sh install
+```
+
+The installer preserves `.env`, installs only the server-side dependencies, downloads the voice worker's local model assets, and starts all three processes. It requires `OPENAI_API_KEY` and the generated LiveKit credentials in `.env`. It captures the current `PATH` in the plist files so `node`, `uv`, `livekit-server`, Codex, and Herdr remain discoverable outside an interactive shell.
+
+LaunchAgents start automatically after this user logs in following a Mac restart. They intentionally do not run before login: the service uses the user's files, Codex authentication, and Herdr session. Each process is independently kept alive by launchd.
+
+After finishing and validating a source update, refresh dependencies/assets and reload the services:
+
+```sh
+sh scripts/service.sh update
+```
+
+`update` does not run `git pull` or the test suite. It only prepares the current checkout and reloads the installed services. Other operations:
+
+```sh
+sh scripts/service.sh restart   # restart current code without reinstalling dependencies
+sh scripts/service.sh status
+sh scripts/service.sh logs
+sh scripts/service.sh stop
+sh scripts/service.sh start
+sh scripts/service.sh uninstall # preserves .env, .data, and logs
+```
+
+Service output is stored under `.data/logs/`. Run the script again from an interactive shell if the repository path or command `PATH` changes, because both are recorded in `~/Library/LaunchAgents/dev.tim.orchestrator.*.plist`.
+
 Fresh local configuration defaults to loopback. For a phone, set a reachable `LIVEKIT_NODE_IP` and verify actual WebRTC audio, not just signaling. The current private Pixel setup uses Tailscale for both control and media.
 
 ### Live transcription
@@ -152,7 +183,7 @@ Actual phone audio and interruption still require a separate user-driven check.
 - Restrict tailnet access to the phone and Mac. Needed ports: TCP 8787 (control), TCP 7880 (signaling), TCP 7881 (ICE fallback), UDP 7882 (media). Test actual ICE connectivity; signaling success alone does not prove audio works.
 - Do not publish these listeners with Funnel, a public reverse proxy or router port forwarding. Tailscale supplies device access control and transport encryption; the app has no account/login layer.
 - LiveKit join tokens are issued automatically. Worker reply credentials are scoped to a managed session and kept in owner-only files; local same-user coding agents are not a sandbox from each other.
-- Keep the Mac awake while it hosts active tasks. Automatic startup/login services are not installed by these scripts.
+- Keep the Mac awake while it hosts active tasks. The optional launchd setup above starts services after login but does not prevent sleep.
 
 ## Worker setup
 
