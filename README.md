@@ -203,3 +203,23 @@ work; the final answer remains in chat. See the [reply contract](docs/contract.m
 environment; adding it does not switch the running provider. This source update
 requires a coordinated control/voice restart and separate Pixel latency/listening
 verification; offline tests are not a phone performance or voice-quality result.
+
+### Voice tuning (source update; not phone-verified)
+
+Settings now includes a compact **Voice tuning** draft with detection sliders,
+Default / Noisy room / Responsive presets, and supported phone AEC/NS/AGC requests.
+**Save for next join** persists independently of chat history; reset/presets edit
+only the draft until saved. Saving does not mute, disconnect, or retune a running
+utterance. Disconnect and explicitly join again to use saved changes. Mute/unmute
+and SDK reconnect keep the original join snapshot, including room capture defaults.
+
+The panel separates saved values, current join requests, and Mac-confirmed tuning.
+Phone switches are requests, not verified hardware state: Android's installed
+WebRTC `getSettings()` reports hardcoded booleans, and device behavior may vary.
+Disabling echo cancellation on speaker risks the assistant hearing itself.
+Local end silence changes Silero only; transcription and fixed 0.8–3 second SDK
+endpointing also affect latency. Mac mic/speech indicators are transient received
+RMS/local detection, never command acceptance, and expire when stale. Buffered STT
+shows telemetry unavailable rather than simulated levels. A compatible control
+and voice worker are needed for confirmation; custom tuning is refused when an
+old control server does not acknowledge it. See [wire contract](docs/contract.md#voice-tuning-and-ephemeral-diagnostics).

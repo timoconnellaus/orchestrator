@@ -25,6 +25,7 @@ from livekit.agents.language import LanguageCode
 from .realtime_stt import SpeechGate
 from .transcription_turn import MODEL as MODEL
 from .transcription_turn import TranscriptionTurn
+from .voice_diagnostics import VoiceDiagnostics
 
 
 class LiveTranscribeSTT(stt.STT[None]):
@@ -32,6 +33,7 @@ class LiveTranscribeSTT(stt.STT[None]):
         self,
         *,
         vad: vad.VAD,
+        diagnostics: VoiceDiagnostics | None = None,
         language: str = "en",
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -45,6 +47,7 @@ class LiveTranscribeSTT(stt.STT[None]):
             )
         )
         self._vad = vad
+        self.diagnostics = diagnostics
         self._language = language
         self._api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "")
         if not self._api_key:
@@ -66,6 +69,8 @@ class LiveTranscribeSTT(stt.STT[None]):
         if self._enabled == enabled:
             return
         self._enabled = enabled
+        if self.diagnostics is not None:
+            self.diagnostics.reset()
         for stream in list(self._streams):
             stream.capture_boundary(require_silence=False)
 
@@ -136,6 +141,8 @@ class _LiveStream(stt.SpeechStream):
         if self._input_ch.closed:
             return
         self._generation += 1
+        if self._owner.diagnostics is not None:
+            self._owner.diagnostics.reset()
         self._require_silence = require_silence
         if self._current is not None and not self._current.ended:
             self._current.abort("Unfinished speech was discarded at a capture boundary")
@@ -194,6 +201,8 @@ class _LiveStream(stt.SpeechStream):
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await self._stop_vad()
+            if self._owner.diagnostics is not None:
+                self._owner.diagnostics.reset()
             if self._vad_failed.done() and not self._vad_failed.cancelled():
                 self._vad_failed.exception()
             await asyncio.gather(*(turn.aclose() for turn in list(self._all_turns)))
@@ -254,6 +263,15 @@ class _LiveStream(stt.SpeechStream):
                 self.capture_boundary(require_silence=True)
                 self._warning("Stale microphone audio was discarded; please repeat after a pause")
                 continue
+            if self._owner.diagnostics is not None:
+                speech = pipeline.gate.active
+                if event.type == vad.VADEventType.START_OF_SPEECH:
+                    speech = True
+                elif event.type == vad.VADEventType.END_OF_SPEECH:
+                    speech = False
+                self._owner.diagnostics.observe(
+                    event, speech=speech and not pipeline.require_silence
+                )
             if pipeline.require_silence:
                 if not event.speaking and event.silence_duration >= 0.55:
                     pipeline.require_silence = False

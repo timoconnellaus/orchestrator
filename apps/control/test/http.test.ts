@@ -95,8 +95,8 @@ test('LiveKit token is signed, room-scoped, uniquely identified and explicitly d
     const claims = await verifier.verify(one.token); const other = await verifier.verify(two.token);
     assert.notEqual(claims.sub, other.sub); assert.equal(claims.video!.room, one.room);
     assert.equal(other.video!.room, two.room);
-    assert.deepEqual(JSON.parse(claims.metadata!), { conversationId: 'main' });
-    assert.deepEqual(JSON.parse(other.metadata!), { conversationId: 'main' });
+    assert.deepEqual(JSON.parse(claims.metadata!), { conversationId: 'main', room: one.room, speaker: one.speaker, voiceTuning: one.voiceTuning });
+    assert.deepEqual(JSON.parse(other.metadata!), { conversationId: 'main', room: two.room, speaker: two.speaker, voiceTuning: two.voiceTuning });
     assert.equal(claims.video!.roomJoin, true); assert.equal(claims.video!.roomAdmin, undefined);
     assert.match(JSON.stringify(claims.roomConfig), /orchestrator-voice/);
     assert.equal(f.store.events(0).length, 0);

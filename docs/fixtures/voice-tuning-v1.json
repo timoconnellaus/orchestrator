@@ -1,0 +1,15 @@
+{
+  "defaults": {"version":1,"activationThreshold":0.5,"minSpeechMs":50,"endSilenceMs":550,"interruptionMs":500,"echoCancellation":true,"noiseSuppression":true,"autoGainControl":true},
+  "validOverrides": [
+    {"activationThreshold":0.3,"minSpeechMs":50,"endSilenceMs":300,"interruptionMs":300},
+    {"activationThreshold":0.8,"minSpeechMs":300,"endSilenceMs":1200,"interruptionMs":1200},
+    {"echoCancellation":false,"noiseSuppression":false,"autoGainControl":false}
+  ],
+  "invalidOverrides": [
+    {"version":2}, {"version":true}, {"unknown":1},
+    {"activationThreshold":0.29}, {"activationThreshold":0.81}, {"activationThreshold":true},
+    {"minSpeechMs":49}, {"minSpeechMs":301}, {"minSpeechMs":50.5}, {"minSpeechMs":false},
+    {"endSilenceMs":299}, {"endSilenceMs":1201}, {"interruptionMs":299}, {"interruptionMs":1201},
+    {"echoCancellation":1}, {"noiseSuppression":"true"}, {"autoGainControl":null}
+  ]
+}

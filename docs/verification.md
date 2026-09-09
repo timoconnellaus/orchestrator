@@ -11,7 +11,7 @@
 | Local LiveKit 1.13.6 transport | Two real local RTC participants exchanged reliable data and non-silent synthetic audio; no speech provider calls |
 | Flutter analyze/tests/APK in integrated checkout | Clean analysis, 34 tests pass, debug APK builds; live captions are tested without modifying drafts, outbox, or durable chat. The caption APK was installed on the authorized Pixel with adb reporting Success; includes no-stretch edge behavior and dragging selectable text in long main/worker histories. Earlier no-stretch APK installed on emulator-5554; an actual drag moved a message 262 px without changing its width/height. Dependencies warn about future Kotlin Gradle plugin compatibility |
 | Live Codex answer + read-only routing tool | PASS: real authenticated exact answer through HTTP; duplicate submission kept one operation; persisted thread resumed after app-server restart; exactly one real list_sessions callback. Worker mutations denied in code; no existing workers changed |
-| Emulator install/UI/reconnect | Historical emulator-only run: settings saved http://10.0.2.2:8790, main chat round trip, mock worker creation and worker follow-up/reply verified through the UI; app force-stop/relaunch preserved URL/history, replayed a reply created while offline exactly once, and kept voice disarmed |
+| Emulator install/UI/reconnect | Historical emulator-only run: settings saved <http://10.0.2.2:8790>, main chat round trip, mock worker creation and worker follow-up/reply verified through the UI; app force-stop/relaunch preserved URL/history, replayed a reply created while offline exactly once, and kept voice disarmed |
 | Real worker provisioning/delivery | Not run; existing Herdr workers were not mutated. Approved project root /Users/tim/repos is now saved in private local configuration |
 | Paid OpenAI transcription/TTS | PASS: both gpt-4o-mini-transcribe and gpt-4o-mini-tts accessible. Repeat generated 122,444-byte synthetic WAV and transcribed exactly "Orchestrator speech check." Initial short-phrase assertion failed without a saved transcript, so its cause remains unknown; this verifies access, not an accuracy benchmark. No microphone recording used |
 | Authorized Pixel 9a basic voice | Previous APK installed with permission; user confirmed voice worked, corroborated by successful source-voice operations and assistant replies in the journal. Private control/media use Tailscale, control port 8792. Caption update installed after explicit approval; control/voice services restarted with zero active control requests and healthy endpoints. Private STT configuration now selects gpt-live-transcribe. The updated app was observed Live and mic armed; actual caption accuracy/interruption still need user confirmation |
@@ -189,3 +189,32 @@ The implementation workflow's report aggregation failed on an undefined output f
 ## Important distinctions
 
 Mock worker results are simulated. Herdr status observation and successful model replies do not prove live worker provisioning or delivery. Local RTC audio does not establish emulator/phone ICE routing, microphone quality, cloud speech correctness, or eight-hour endurance. Those require separate evidence.
+
+## Voice tuning source update — offline verification only
+
+In the isolated implementation worktree, `sh scripts/check.sh` passes **249 tests**
+(59 control, 19 worker tools, 126 voice, 45 Flutter), with TypeScript builds,
+Ruff, mypy, Flutter analysis and script syntax checks clean. `flutter build apk
+--debug` also passes. Existing dependency warnings concern future Kotlin Gradle
+plugin compatibility; dependencies were not upgraded. These results apply only
+to this source update, not the historical deployment checks above.
+
+The voice tuning slice adds cross-language defaults/invalid-case fixtures, token
+and dispatch forwarding tests, persisted settings/save-failure tests, compact
+320-pixel Material3 panel tests, all eight supported capture-option combinations
+(including full-reconnect room defaults), frozen-join and old-server mismatch
+coverage. Python exercises the actual pinned Silero option-update seam without
+loading ONNX, and the existing in-memory STT transport verifies guarded received
+RMS and real capture resets. Diagnostics tests cover coalescing while transport
+blocks, owned sender shutdown, stale/reset state, strict sender/room/schema/
+sequence/generation/nonce validation, fallback availability, and bounded pending
+join acknowledgement expiry. Existing offline network guards are unchanged.
+
+This update has **not been deployed, installed on a phone, microphone-tested, or
+verified against production**. No speech/model API, adb, capture, or existing
+worker operations were run for it. Hardware processing effectiveness, acoustic
+threshold/preset quality, phone/Mac clock agreement, real LiveKit diagnostic
+routing, Android reconnect behavior and audible interruption still need separate
+user-approved physical-device checks. A debug APK build or offline test success
+is not evidence of any of these properties. Integrate compatible control, voice,
+and mobile sources together; deploy/restart only as a separate parent-owned step.

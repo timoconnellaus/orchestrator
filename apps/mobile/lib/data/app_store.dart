@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import 'control_api.dart';
+import '../voice/voice_tuning.dart';
 
 abstract class LocalStore {
   String? read(String key);
@@ -28,6 +29,21 @@ class PreferencesStore implements LocalStore {
 class AppStore extends ChangeNotifier {
   AppStore(this.storage, {ControlApi Function(String)? apiFactory})
     : _factory = apiFactory ?? HttpControlApi.new;
+  VoiceTuning savedVoiceTuning = VoiceTuning.defaults;
+  String? voiceTuningError;
+  Future<void> saveVoiceTuning(VoiceTuning tuning) async {
+    try {
+      await storage.write('voiceTuning', jsonEncode(tuning.toJson()));
+      savedVoiceTuning = tuning;
+      voiceTuningError = null;
+      _notify();
+    } catch (e) {
+      voiceTuningError = 'Voice settings were not saved: $e';
+      _notify();
+      rethrow;
+    }
+  }
+
   static const defaultUrl = 'http://10.0.2.2:8787';
   final LocalStore storage;
   final ControlApi Function(String) _factory;
@@ -49,6 +65,13 @@ class AppStore extends ChangeNotifier {
 
   Future<void> initialize() async {
     url = storage.read('controlUrl') ?? defaultUrl;
+    try {
+      final raw = storage.read('voiceTuning');
+      if (raw != null) savedVoiceTuning = VoiceTuning.fromJson(jsonDecode(raw));
+    } catch (_) {
+      voiceTuningError =
+          'Saved voice settings could not be read; using defaults.';
+    }
     _restore();
     api = _factory(url);
     await reconnect();

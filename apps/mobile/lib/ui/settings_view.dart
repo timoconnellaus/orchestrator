@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/app_store.dart';
 import '../voice/voice_controller.dart';
+import 'voice_tuning_panel.dart';
 
 class SettingsView extends StatefulWidget {
   const SettingsView({super.key, required this.store, required this.voice});
@@ -86,6 +87,8 @@ class _SettingsViewState extends State<SettingsView> {
         ),
       ),
       const SizedBox(height: 28),
+      VoiceTuningPanel(store: widget.store, voice: widget.voice),
+      const SizedBox(height: 16),
       const _InfoCard(
         icon: Icons.wifi_tethering,
         title: 'Reachable from your phone',

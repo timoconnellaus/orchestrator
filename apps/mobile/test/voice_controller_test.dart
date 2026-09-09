@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:livekit_client/livekit_client.dart' show TranscriptionSegment;
 import 'package:orchestrator/voice/voice_controller.dart';
+import 'package:orchestrator/voice/voice_tuning.dart';
 
 import 'fakes.dart';
 
@@ -30,7 +31,10 @@ void main() {
       expect(native.starts, 1);
       expect(voice.armed, true);
       expect(api.paths.single, '/v1/voice/token');
-      expect(api.posts.single, {'conversationId': 'main'});
+      expect(api.posts.single, {
+        'conversationId': 'main',
+        'voiceTuning': VoiceTuning.defaults.toJson(),
+      });
       await voice.toggleMute();
       expect(media.microphoneCalls, [true, false]);
       expect(voice.connected, true);

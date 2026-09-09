@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:orchestrator/data/app_store.dart';
 import 'package:orchestrator/data/control_api.dart';
 import 'package:orchestrator/voice/voice_controller.dart';
+import 'package:orchestrator/voice/voice_diagnostics.dart';
 
 class MemoryStore implements LocalStore {
   final values = <String, String>{};
@@ -53,7 +54,13 @@ class FakeApi implements ControlApi {
       if (!voiceConfigured) {
         throw const ControlError('Voice is not configured on the server');
       }
-      return {'url': 'ws://mock', 'token': 'mock', 'room': 'orchestrator-main'};
+      return {
+        'url': 'ws://mock',
+        'token': 'mock',
+        'room': 'orchestrator-main',
+        'speaker': 'phone',
+        'voiceTuning': body['voiceTuning'],
+      };
     }
     return {'operationId': body['id']};
   }
@@ -102,6 +109,9 @@ Json event(int seq, Json data, {String type = 'message.created'}) => {
 };
 
 class FakeVoice implements VoiceBackend {
+  VoiceJoinOptions? joinOptions;
+  @override
+  void Function(VoiceDiagnostics?)? onDiagnostics;
   int connections = 0;
   int disconnects = 0;
   final microphoneCalls = <bool>[];
@@ -111,7 +121,12 @@ class FakeVoice implements VoiceBackend {
   @override
   void Function(VoiceTranscript)? onUserTranscript;
   @override
-  Future<void> connect(String url, String token) async {
+  Future<void> connect(
+    String url,
+    String token, {
+    VoiceJoinOptions? options,
+  }) async {
+    joinOptions = options;
     connections++;
     await connecting?.future;
   }

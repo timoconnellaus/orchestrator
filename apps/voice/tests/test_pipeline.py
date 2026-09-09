@@ -39,9 +39,10 @@ async def test_closed_speech_session_retires_job_and_unbinds_capture(monkeypatch
     events: rtc.EventEmitter[str] = rtc.EventEmitter()
     session = SimpleNamespace(on=events.on, start=AsyncMock())
     ctx = Mock(spec=JobContext)
-    ctx.job = SimpleNamespace(metadata="")
+    ctx.job = SimpleNamespace(metadata="", room=SimpleNamespace(name="room"))
     ctx.proc = SimpleNamespace(userdata={"vad": object()})
-    ctx.room = object()
+    ctx.room = rtc.EventEmitter()
+    ctx.room.local_participant = SimpleNamespace(set_name=AsyncMock())
     unbind = Mock()
     monkeypatch.setattr("orchestrator_voice.worker.make_session", lambda *_: session)
     monkeypatch.setattr("orchestrator_voice.worker.bind_capture_boundaries", lambda *_: unbind)
@@ -443,3 +444,72 @@ async def test_closing_llm_node_at_yield_closes_its_reply_stream_immediately():
     assert stream.closed
     assert methods == ["POST", "GET"]
     await bridge.aclose()
+
+
+async def test_job_diagnostics_are_linked_ephemeral_and_name_failure_keeps_capture_safety(
+    monkeypatch,
+):
+    from orchestrator_voice.voice_diagnostics import PROBE_TOPIC, TOPIC
+    from orchestrator_voice.voice_tuning import VoiceTuning
+
+    events: rtc.EventEmitter[str] = rtc.EventEmitter()
+    speaker = SimpleNamespace(identity="phone")
+    session = SimpleNamespace(
+        on=events.on, start=AsyncMock(), room_io=SimpleNamespace(linked_participant=speaker)
+    )
+    ctx = Mock(spec=JobContext)
+    tuning = VoiceTuning(activationThreshold=0.7)
+    ctx.job = SimpleNamespace(
+        metadata=json.dumps(
+            {
+                "conversationId": "main",
+                "room": "room",
+                "speaker": "phone",
+                "voiceTuning": tuning.wire(),
+            }
+        ),
+        room=SimpleNamespace(name="room"),
+    )
+    ctx.proc = SimpleNamespace(userdata={"vad": object()})
+    ctx.local_participant_identity = "agent"
+    ctx.room = rtc.EventEmitter()
+    ctx.room.local_participant = SimpleNamespace(
+        set_name=AsyncMock(side_effect=RuntimeError("offline name update failure")),
+        publish_data=AsyncMock(),
+    )
+    captured = []
+
+    def make(*args):
+        captured.append(args)
+        return session
+
+    unbind = Mock()
+    monkeypatch.setattr("orchestrator_voice.worker.make_session", make)
+    monkeypatch.setattr("orchestrator_voice.worker.bind_capture_boundaries", lambda *_: unbind)
+    try:
+        await entrypoint(ctx)
+        assert captured[0][2] == tuning
+        meter = captured[0][3]
+        ctx.room.emit(
+            "data_received",
+            SimpleNamespace(topic=PROBE_TOPIC, participant=speaker, data=b'{"nonce":"one"}'),
+        )
+        await meter._send(meter.packet())
+        publication = ctx.room.local_participant.publish_data
+        publication.assert_awaited_once()
+        assert publication.call_args.kwargs == {
+            "reliable": False,
+            "topic": TOPIC,
+            "destination_identities": ["phone"],
+        }
+        assert json.loads(publication.call_args.args[0])["voiceTuning"] == tuning.wire()
+        session.room_io.linked_participant = SimpleNamespace(identity="other")
+        await meter._send(meter.packet())
+        assert publication.await_count == 1
+        events.emit("close", CloseEvent(reason=CloseReason.USER_INITIATED))
+        unbind.assert_called_once()
+        ctx.shutdown.assert_called_once()
+    finally:
+        for call in ctx.add_shutdown_callback.call_args_list:
+            await call.args[0]()
+    assert meter._task is None

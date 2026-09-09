@@ -247,7 +247,7 @@ class VoiceBar extends StatelessWidget {
             ),
             if (!voice.connected && !voice.busy)
               TextButton(
-                onPressed: () => voice.join(store.api),
+                onPressed: () => voice.join(store.api, tuning: store.savedVoiceTuning),
                 child: const Text('Join voice'),
               ),
             if (voice.connected)

@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:livekit_client/livekit_client.dart';
+import 'package:uuid/uuid.dart';
 
 import '../data/control_api.dart';
+import 'voice_diagnostics.dart';
+import 'voice_tuning.dart';
 
 @immutable
 class VoiceTranscript {
@@ -15,11 +19,12 @@ class VoiceTranscript {
 }
 
 abstract class VoiceBackend {
-  Future<void> connect(String url, String token);
+  Future<void> connect(String url, String token, {VoiceJoinOptions? options});
   Future<void> microphone(bool enabled);
   Future<void> disconnect();
   void Function(String state)? onState;
   void Function(VoiceTranscript transcript)? onUserTranscript;
+  void Function(VoiceDiagnostics? diagnostics)? onDiagnostics;
 }
 
 class LiveKitVoice implements VoiceBackend {
@@ -29,6 +34,49 @@ class LiveKitVoice implements VoiceBackend {
   void Function(String state)? onState;
   @override
   void Function(VoiceTranscript transcript)? onUserTranscript;
+
+  @override
+  void Function(VoiceDiagnostics? diagnostics)? onDiagnostics;
+  VoiceTuning _tuning = VoiceTuning.defaults;
+  VoiceDiagnosticsReceiver? _diagnostics;
+  Timer? _probeTimer;
+  bool _captureEnabled = false;
+  bool _probing = false;
+
+  void _resetDiagnostics({bool probe = false}) {
+    _probeTimer?.cancel();
+    _diagnostics?.nonce = probe ? const Uuid().v4() : null;
+    onDiagnostics?.call(null);
+    if (probe) {
+      unawaited(_probe());
+      _probeTimer = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => unawaited(_probe()),
+      );
+    }
+  }
+
+  Future<void> _probe() async {
+    final nonce = _diagnostics?.nonce;
+    final participant = _room?.localParticipant;
+    if (_probing || nonce == null || participant == null) return;
+    _probing = true;
+    try {
+      await participant
+          .publishData(
+            utf8.encode(jsonEncode({'nonce': nonce})),
+            reliable: true,
+            topic: VoiceDiagnosticsReceiver.probeTopic,
+          )
+          // Future.timeout cannot cancel an SDK send. Keep the in-flight guard
+          // until the underlying future completes so a blocked transport cannot
+          // accumulate one abandoned send per timer tick.
+          .whenComplete(() => _probing = false)
+          .timeout(const Duration(milliseconds: 500));
+    } catch (_) {
+      // Diagnostics never interfere with microphone lifecycle.
+    }
+  }
 
   @visibleForTesting
   static Iterable<VoiceTranscript> userTranscripts(
@@ -47,17 +95,58 @@ class LiveKitVoice implements VoiceBackend {
   }
 
   @override
-  Future<void> connect(String url, String token) async {
-    final room = Room();
+  Future<void> connect(
+    String url,
+    String token, {
+    VoiceJoinOptions? options,
+  }) async {
+    _tuning = options?.tuning ?? VoiceTuning.defaults;
+    _captureEnabled = false;
+    _resetDiagnostics();
+    _diagnostics = options?.room != null && options?.speaker != null
+        ? VoiceDiagnosticsReceiver(
+            room: options!.room!,
+            speaker: options.speaker!,
+            tuning: _tuning,
+          )
+        : null;
+    // Full SDK reconnect recreates tracks from the ROOM defaults, not the
+    // options supplied to the previous setMicrophoneEnabled call.
+    final room = Room(roomOptions: _tuning.roomOptions);
     _room = room;
     void state(String value) {
       if (_room == room) onState?.call(value);
     }
 
     _listener = room.createListener()
-      ..on<RoomReconnectingEvent>((_) => state('Reconnecting audio'))
-      ..on<RoomReconnectedEvent>((_) => state('Connected'))
+      ..on<RoomReconnectingEvent>((_) {
+        if (_room != room) return;
+        _resetDiagnostics();
+        state('Reconnecting audio');
+      })
+      ..on<RoomReconnectedEvent>((_) {
+        if (_room != room) return;
+        _resetDiagnostics(probe: _captureEnabled);
+        state('Connected');
+      })
       ..on<RoomDisconnectedEvent>((_) => state('Disconnected'))
+      ..on<DataReceivedEvent>((event) {
+        final participant = event.participant;
+        if (_room != room ||
+            event.topic != VoiceDiagnosticsReceiver.topic ||
+            participant == null) {
+          return;
+        }
+        final value = _diagnostics?.receive(
+          event.data,
+          sender: participant.identity,
+          name: participant.name,
+          isAgent: participant.kind == ParticipantKind.AGENT,
+          localSpeaker: room.localParticipant?.identity ?? '',
+          currentRoom: room.name ?? '',
+        );
+        if (value != null) onDiagnostics?.call(value);
+      })
       ..on<TranscriptionEvent>((event) {
         if (_room != room) return;
         // The event identity is the transcribed speaker, not the forwarding agent.
@@ -86,16 +175,19 @@ class LiveKitVoice implements VoiceBackend {
     if (participant == null && enabled) {
       throw StateError('Voice is not connected');
     }
+    _captureEnabled = enabled;
+    _resetDiagnostics(probe: enabled);
     await participant?.setMicrophoneEnabled(
       enabled,
-      audioCaptureOptions: const AudioCaptureOptions(
-        stopAudioCaptureOnMute: true,
-      ),
+      audioCaptureOptions: _tuning.captureOptions,
     );
   }
 
   @override
   Future<void> disconnect() async {
+    _captureEnabled = false;
+    _resetDiagnostics();
+    _diagnostics = null;
     final room = _room;
     _room = null;
     await _listener?.dispose();
@@ -137,12 +229,16 @@ class VoiceController extends ChangeNotifier {
       unawaited(disconnect());
     };
     backend.onUserTranscript = _receiveUserTranscript;
+    backend.onDiagnostics = _receiveDiagnostics;
     backend.onState = (value) {
       if (value == 'Disconnected') {
         unawaited(disconnect());
       } else if (connected) {
         _captionsReady = value == 'Connected';
-        if (!_captionsReady) _clearCaption();
+        if (!_captionsReady) {
+          _clearCaption();
+          _clearDiagnostics();
+        }
         status = '$value · ${armed ? 'mic armed' : 'muted'}';
         _notify();
       }
@@ -160,6 +256,44 @@ class VoiceController extends ChangeNotifier {
   VoiceTranscript? liveCaption;
   bool _captionsReady = false;
   final Set<String> _retiredCaptionIds = {};
+  VoiceTuning? activeTuning;
+  VoiceTuning? confirmedTuning;
+  VoiceDiagnostics? diagnostics;
+  VoiceDiagnostics? _pendingDiagnostics;
+  Timer? _diagnosticsExpiry;
+  bool _joiningMicrophone = false;
+
+  void _clearDiagnostics() {
+    _diagnosticsExpiry?.cancel();
+    diagnostics = null;
+    confirmedTuning = null;
+    _pendingDiagnostics = null;
+  }
+
+  void _receiveDiagnostics(VoiceDiagnostics? value) {
+    if (_disposed) return;
+    if (value == null) {
+      _clearDiagnostics();
+      _notify();
+      return;
+    }
+    if (value.tuning != activeTuning ||
+        (!_joiningMicrophone && (!connected || !armed || !_captionsReady))) {
+      return;
+    }
+    _diagnosticsExpiry?.cancel();
+    _diagnosticsExpiry = Timer(const Duration(milliseconds: 1500), () {
+      _clearDiagnostics();
+      _notify();
+    });
+    if (_joiningMicrophone) {
+      _pendingDiagnostics = value;
+      return;
+    }
+    diagnostics = value;
+    confirmedTuning = value.tuning;
+    _notify();
+  }
 
   void _retireCaption(String id) {
     _retiredCaptionIds.add(id);
@@ -192,9 +326,14 @@ class VoiceController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> join(ControlApi api) async {
+  Future<void> join(
+    ControlApi api, {
+    VoiceTuning tuning = VoiceTuning.defaults,
+  }) async {
     if (busy || connected) return;
     final epoch = ++_epoch;
+    activeTuning = tuning; // Freeze BEFORE permission/token/media awaits.
+    _clearDiagnostics();
     _clearCaption();
     _retiredCaptionIds.clear();
     _captionsReady = false;
@@ -210,17 +349,33 @@ class VoiceController extends ChangeNotifier {
       _notify();
       final credentials = await api.post('/v1/voice/token', {
         'conversationId': 'main',
+        'voiceTuning': tuning.toJson(),
       });
       if (epoch != _epoch) return;
+      final effective = credentials['voiceTuning'];
+      if (effective == null
+          ? tuning != VoiceTuning.defaults
+          : VoiceTuning.fromJson(effective) != tuning) {
+        throw StateError(
+          'Server did not acknowledge requested voice tuning. Update server or use defaults.',
+        );
+      }
       await backend.connect(
         credentials['url'] as String,
         credentials['token'] as String,
+        options: VoiceJoinOptions(
+          tuning,
+          room: effective == null ? null : credentials['room'] as String?,
+          speaker: effective == null ? null : credentials['speaker'] as String?,
+        ),
       );
       if (epoch != _epoch) {
         await backend.disconnect();
         return;
       }
+      _joiningMicrophone = true;
       await backend.microphone(true);
+      _joiningMicrophone = false;
       if (epoch != _epoch) {
         await backend.disconnect();
         return;
@@ -229,11 +384,20 @@ class VoiceController extends ChangeNotifier {
       armed = true;
       _captionsReady = true;
       status = 'Listening · mic armed';
+      final pending = _pendingDiagnostics;
+      _pendingDiagnostics = null;
+      if (pending != null) {
+        // Preserve the original receipt expiry while microphone enable awaited.
+        diagnostics = pending;
+        confirmedTuning = pending.tuning;
+      }
     } catch (e) {
+      if (epoch != _epoch) return;
       error = 'Voice unavailable: $e. Text chat still works.';
       await _release();
       status = 'Voice off';
     } finally {
+      _joiningMicrophone = false;
       if (epoch != _epoch || !armed) await service.stop();
       busy = false;
       _notify();
@@ -249,6 +413,7 @@ class VoiceController extends ChangeNotifier {
       if (armed) {
         // Disarm intent is set before any await. SDK reconnect never calls arm.
         armed = false;
+        _clearDiagnostics();
         _clearCaption();
         _notify();
         await backend.microphone(false);
@@ -276,6 +441,8 @@ class VoiceController extends ChangeNotifier {
   }
 
   Future<void> _release() async {
+    activeTuning = null;
+    _clearDiagnostics();
     armed = false;
     connected = false;
     _captionsReady = false;
@@ -292,6 +459,9 @@ class VoiceController extends ChangeNotifier {
     final alreadyBusy = busy;
     busy = true;
     ++_epoch;
+    _joiningMicrophone = false;
+    activeTuning = null;
+    _clearDiagnostics();
     armed = false;
     connected = false;
     _captionsReady = false;
@@ -318,6 +488,7 @@ class VoiceController extends ChangeNotifier {
     service.onStop = null;
     backend.onState = null;
     backend.onUserTranscript = null;
+    backend.onDiagnostics = null;
     unawaited(disconnect());
     super.dispose();
   }

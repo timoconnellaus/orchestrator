@@ -49,4 +49,17 @@ export const createSchema = z.object({ id: idSchema, agent: z.enum(['pi', 'codex
 export const sendSchema = z.object({ id: idSchema, text }).strict();
 export const chatSchema = z.object({ id: idSchema, text, conversationId: z.literal('main').default('main'), source: z.enum(['text', 'voice']).default('text') }).strict();
 export const replySchema = z.object({ id: idSchema, text, replyTo: opaqueIdSchema.optional(), kind: z.enum(['progress', 'question', 'result', 'error']) }).strict();
-export const voiceSchema = z.object({ conversationId: z.literal('main') }).strict();
+export const voiceTuningSchema = z.object({
+  version: z.literal(1),
+  activationThreshold: z.number().finite().min(0.3).max(0.8),
+  minSpeechMs: z.number().int().min(50).max(300),
+  endSilenceMs: z.number().int().min(300).max(1200),
+  interruptionMs: z.number().int().min(300).max(1200),
+  echoCancellation: z.boolean(), noiseSuppression: z.boolean(), autoGainControl: z.boolean(),
+}).strict();
+export type VoiceTuning = z.infer<typeof voiceTuningSchema>;
+export const defaultVoiceTuning: Readonly<VoiceTuning> = Object.freeze({
+  version: 1, activationThreshold: 0.5, minSpeechMs: 50, endSilenceMs: 550,
+  interruptionMs: 500, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+});
+export const voiceSchema = z.object({ conversationId: z.literal('main'), voiceTuning: voiceTuningSchema.optional() }).strict();

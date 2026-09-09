@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from typing import Any
@@ -26,6 +27,8 @@ from .live_transcribe import MODEL as LIVE_STT_MODEL
 from .live_transcribe import LiveTranscribeSTT
 from .reply_audio import stream_reply_audio
 from .speech import make_tts
+from .voice_diagnostics import PROBE_TOPIC, TOPIC, VoiceDiagnostics
+from .voice_tuning import VoiceTuning, job_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +109,17 @@ class ControlAgent(Agent):
             await audio.aclose()
 
 
-def make_session(settings: Settings, vad: silero.VAD) -> AgentSession[None]:
+def make_session(
+    settings: Settings,
+    vad: silero.VAD,
+    tuning: VoiceTuning | None = None,
+    diagnostics: VoiceDiagnostics | None = None,
+) -> AgentSession[None]:
+    tuning = tuning or VoiceTuning()
+    tuning.apply(vad)
     return AgentSession[None](
         stt=(
-            LiveTranscribeSTT(vad=vad, language=settings.stt_language)
+            LiveTranscribeSTT(vad=vad, language=settings.stt_language, diagnostics=diagnostics)
             if settings.stt_model == LIVE_STT_MODEL
             else openai.STT(
                 model=settings.stt_model, language=settings.stt_language, use_realtime=False
@@ -117,7 +127,7 @@ def make_session(settings: Settings, vad: silero.VAD) -> AgentSession[None]:
         ),
         tts=make_tts(settings),
         vad=vad,
-        turn_handling=turn_handling(),
+        turn_handling=turn_handling(tuning),
         user_away_timeout=None,
     )
 
@@ -214,7 +224,42 @@ server = AgentServer(
 @server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     settings = Settings.from_env()
+    metadata = job_metadata(ctx.job.metadata)
     conversation_id = settings.conversation_for_job(ctx.job.metadata)
+    tuning = (
+        VoiceTuning.parse(metadata["voiceTuning"]) if "voiceTuning" in metadata else VoiceTuning()
+    )
+    if "room" in metadata and metadata["room"] != ctx.job.room.name:
+        raise ValueError("Dispatch room mismatch")
+    speaker = metadata.get("speaker", "")
+
+    async def send_diagnostics(data: bytes) -> None:
+        linked = session.room_io.linked_participant
+        if linked is not None and linked.identity == speaker:
+            await ctx.room.local_participant.publish_data(
+                data, reliable=False, topic=TOPIC, destination_identities=[speaker]
+            )
+
+    diagnostics = VoiceDiagnostics(
+        tuning,
+        available=settings.stt_model == LIVE_STT_MODEL,
+        room=ctx.job.room.name,
+        speaker=speaker,
+        sender=ctx.local_participant_identity,
+        send=send_diagnostics,
+    )
+
+    def receive_probe(packet: rtc.DataPacket) -> None:
+        if packet.topic == PROBE_TOPIC and packet.participant is not None:
+            diagnostics.probe(packet.data, packet.participant.identity)
+
+    ctx.room.on("data_received", receive_probe)
+
+    async def close_diagnostics() -> None:
+        ctx.room.off("data_received", receive_probe)
+        await diagnostics.aclose()
+
+    ctx.add_shutdown_callback(close_diagnostics)
     bridge = ControlBridge(
         httpx.AsyncClient(
             base_url=settings.backend_url,
@@ -225,7 +270,7 @@ async def entrypoint(ctx: JobContext) -> None:
         settings.limits,
     )
     ctx.add_shutdown_callback(bridge.aclose)
-    session = make_session(settings, ctx.proc.userdata["vad"])
+    session = make_session(settings, ctx.proc.userdata["vad"], tuning, diagnostics)
     unbind_capture: Callable[[], None] | None = None
 
     @session.on("error")
@@ -254,6 +299,13 @@ async def entrypoint(ctx: JobContext) -> None:
         record=False,
     )
     unbind_capture = bind_capture_boundaries(ctx.room, session)
+    try:
+        await asyncio.wait_for(ctx.room.local_participant.set_name(AGENT_NAME), timeout=1)
+    except Exception:
+        # A diagnostic identity update must not prevent capture-boundary safety.
+        # The phone will show unavailable if the expected name cannot be set.
+        logger.warning("Voice diagnostic participant name unavailable")
+    diagnostics.start()
     # No greeting, generate_reply, idle timer, nagging, or scheduled hangup.
 
 

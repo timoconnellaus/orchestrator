@@ -127,3 +127,80 @@ reasoner subprocess. No provider/model/voice/endpointing settings change in this
 reply-streaming slice. Deploy compatible control before the updated voice worker;
 older control lacks this endpoint and the voice worker fails closed rather than
 silently polling or replaying.
+
+## Voice tuning and ephemeral diagnostics
+
+`POST /v1/voice/token` accepts `{conversationId:"main", voiceTuning?: TuningV1}`.
+The entire tuning object is required when present; omission alone selects legacy
+defaults. Version 1 fields (unknown fields/versions, non-finite values, numeric
+booleans, noninteger durations and out-of-range values are rejected):
+
+| Field | Range | Default |
+| --- | --- | --- |
+| `version` | 1 | 1 |
+| `activationThreshold` | 0.3–0.8 | 0.5 |
+| `minSpeechMs` | 50–300 integer ms | 50 |
+| `endSilenceMs` | 300–1200 integer ms | 550 |
+| `interruptionMs` | 300–1200 integer ms | 500 |
+| `echoCancellation`, `noiseSuppression`, `autoGainControl` | boolean | true |
+
+The response includes canonical `voiceTuning`, `room`, and linked phone `speaker`
+identity alongside `url` and `token`. Signed participant metadata and the explicit
+`orchestrator-voice` dispatch metadata carry exactly `{conversationId, voiceTuning,
+room, speaker}`. Python accepts legacy metadata without tuning, rejects unknown
+metadata fields, bounds the encoded metadata to 4096 bytes and identifiers to 256
+characters, and checks dispatch room identity. Rooms remain fresh per explicit
+join, conversation `main` stays durable, and closed speech sessions retire jobs.
+The shared fixture is `docs/fixtures/voice-tuning-v1.json`.
+
+Flutter freezes an immutable validated snapshot before the first join await.
+Saving uses the independent `voiceTuning` preference, never the history snapshot,
+and surfaces write failures without replacing the last saved value. Presets and
+reset edit the draft only. Supported `AudioCaptureOptions` are used both for
+microphone enable and **RoomOptions defaults** (the pinned SDK uses these to
+recreate tracks on full reconnect); `stopAudioCaptureOnMute:true` remains fixed.
+No native live updates or `getSettings()` hardware-verification claims are made.
+A missing/mismatched token tuning echo rejects custom joins; legacy default joins
+may continue explicitly unconfirmed. A token echo is not Mac confirmation.
+
+Before either STT or AgentSession creates streams, each job reapplies all exposed
+VAD options, including `deactivation_threshold=max(activationThreshold-.15,.01)`;
+Silero's update method does not derive hysteresis. No running VAD is retuned.
+Interruption minimum follows the snapshot; SDK endpointing remains fixed at
+0.8/3 seconds. Pre-roll, the **0.55 second overflow readmission silence**, all
+upload/buffer/backlog/generation/watchdog limits, no retry/replay, no speculative
+generation/TTS, and no false-interruption resume are unchanged.
+
+Diagnostics use lossy named LiveKit topic `orchestrator.voice.diagnostics.v1` to
+only the session's linked local speaker. The agent uses one owned coalescing
+sender task (at most about 5 Hz, 150 ms send timeout, latest state only, closed at
+job shutdown). No network awaits or per-frame tasks are added to VAD handling.
+After existing generation/enabled/staleness guards, incremental INFERENCE_DONE
+frames supply normalized PCM RMS in [0,1]; START/END and the local gate determine
+speech state (inference can precede the state transition). Capture resets/mute
+clear state and increment generation. No audio, transcript, command, or secrets
+are transmitted by diagnostics; neither diagnostics nor acknowledgements enter
+SQLite, chat, outbox, or preferences.
+
+Packets contain exactly `{version:1, room, speaker, sender, session, nonce,
+sequence, generation, sentAtMs, available, fresh, level, speech, voiceTuning}`.
+Sequence and generation are nonnegative monotonic integers. `session` is a fresh
+worker diagnostics UUID. A phone capture/reconnect boundary rotates its nonce
+and sends a small reliable `{nonce}` probe on `orchestrator.voice.probe.v1` (at
+most once/second; 500 ms local wait cap). The Mac accepts probes only from the
+metadata-linked phone, with an exact schema and a 256-byte limit. Probes reset
+only diagnostics: they never enable capture or change VAD options. Same-nonce
+probes do not reset state. Publishing additionally requires the actual SDK-linked
+participant to match the token speaker.
+
+The phone admits at most 2048 bytes, validates exact schema/finite ranges,
+expected AGENT kind and `orchestrator-voice` name, actual sender identity, local
+speaker/room, tuning equality, pinned sender/session, nonce, sequence and
+generation. It drops packets older than 1.5 seconds (or over 1.5 seconds in the
+future). Mac audio freshness and phone receipt expiry are also 1.5 seconds.
+Clock skew may therefore yield **unavailable**, never fabricated readings.
+One pending join acknowledgement can be buffered during microphone enable, with
+its original receipt expiry; canceled/stale joins cannot revive it. Mute,
+reconnect, disconnect and disposal clear current diagnostics/confirmation without
+implicitly rearming. Buffered STT still applies the shared SDK VAD snapshot but
+reports `available:false`, `fresh:false`, zero level and no detected speech.

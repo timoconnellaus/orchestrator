@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 from collections.abc import Mapping
@@ -10,11 +9,13 @@ from urllib.parse import urlsplit
 from livekit.agents.voice.turn import TurnHandlingOptions
 
 from .bridge import BridgeLimits
+from .voice_tuning import VoiceTuning, job_metadata
 
 AGENT_NAME = "orchestrator-voice"
+DEFAULT_VOICE_TUNING = VoiceTuning()
 
 
-def turn_handling() -> TurnHandlingOptions:
+def turn_handling(tuning: VoiceTuning = DEFAULT_VOICE_TUNING) -> TurnHandlingOptions:
     return {
         "turn_detection": "vad",
         "endpointing": {"mode": "fixed", "min_delay": 0.8, "max_delay": 3.0},
@@ -22,7 +23,7 @@ def turn_handling() -> TurnHandlingOptions:
         "interruption": {
             "enabled": True,
             "mode": "vad",
-            "min_duration": 0.5,
+            "min_duration": tuning.interruptionMs / 1000,
             "min_words": 0,
             "resume_false_interruption": False,
             "false_interruption_timeout": None,
@@ -91,7 +92,7 @@ class Settings:
     def conversation_for_job(self, metadata: str) -> str:
         if not metadata:
             return self.conversation_id
-        value = json.loads(metadata)
+        value = job_metadata(metadata)
         if not isinstance(value, dict):
             raise ValueError("Dispatch metadata must be a JSON object")
         conversation = value.get("conversationId", self.conversation_id)

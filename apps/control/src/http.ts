@@ -116,7 +116,7 @@ export function createHttpServer(service: ControlService) {
       response.on('close', () => { stopped = true; clearInterval(heartbeat); unsubscribe(); streams.delete(response); });
       return;
     }
-    if (method === 'POST' && path === '/v1/voice/token') { voiceSchema.parse(await jsonBody(request)); return respond(response, 200, await voiceToken(service.config)); }
+    if (method === 'POST' && path === '/v1/voice/token') { const body = voiceSchema.parse(await jsonBody(request)); return respond(response, 200, await voiceToken(service.config, body.voiceTuning)); }
     if (path.startsWith('/v1/worker/')) {
       const token = workerToken(request); service.store.authenticate(token);
       if (method === 'POST' && path === '/v1/worker/register') { z.object({}).strict().parse(await jsonBody(request)); return respond(response, 200, service.register(token)); }
